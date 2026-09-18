@@ -61,17 +61,17 @@ export class FreightService {
         data: Partial<FreightFileEntity>
     ) {
         const mode = data.mode || 'sea';
-        const humanId = await FreightRepository.generateHumanId(mode);
+        const fileNo = await FreightRepository.generateHumanId(mode);
 
         const initialStatus = 'draft';
         const file = await FreightRepository.create({
             ...data,
             workspace_id: workspaceId,
             created_by: actorId,
-            human_id: humanId,
+            file_no: fileNo,
             mode,
             status: initialStatus,
-            special_handling_status: data.special_handling_type && data.special_handling_type !== 'none' ? 'orange' : 'green',
+            special_status: 'GREEN',
         });
 
         await AuditService.log({
@@ -81,7 +81,7 @@ export class FreightService {
             entityId: file.id,
             action: 'create',
             toState: initialStatus,
-            payload: { human_id: file.human_id, mode: file.mode, direction: file.direction },
+            payload: { file_no: file.file_no, mode: file.mode, direction: file.direction },
         });
 
         return file;

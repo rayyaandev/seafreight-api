@@ -8,7 +8,7 @@ export const USER_CUSTOMS_ID = '00000000-0000-0000-0000-000000000003';
 export const USER_MANAGER_ID = '00000000-0000-0000-0000-000000000004';
 
 async function seed() {
-    console.log('🌱 Starting complete Sea Freight Foundation seed (Day 1)...');
+    console.log('🌱 Starting complete Sea Freight Foundation seed...');
 
     // 1. Clear existing data in reverse foreign key order
     await db('processed_message').del();
@@ -640,7 +640,7 @@ async function seed() {
         version: 1,
     });
 
-    console.log('✅ Day 1 Foundation Seed completed successfully!');
+    console.log('✅ Sea Freight Foundation Seed completed successfully!');
     console.log('   - 1 Workspace, 3 Authenticated Users, 5 Roles & Permissions');
     console.log('   - 10 Clients, 20 UN/LOCODE Ports, 10 Incoterms, 6 Carriers');
     console.log('   - 4 Operational Sea Freight dossiers (Import & Export with IMDG/Reefer)');
@@ -648,6 +648,6 @@ async function seed() {
 }
 
 seed().catch((err) => {
-    console.error('❌ Day 1 Seeding error:', err);
+    console.error('❌ Seeding error:', err);
     process.exit(1);
 });

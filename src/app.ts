@@ -1,6 +1,8 @@
 import express, { type Express } from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
+import { authRouter } from './auth/auth.router.js';
 import { authMiddleware } from './middleware/auth.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { freightRouter } from './modules/freight/freight.router.js';
@@ -11,6 +13,7 @@ export function createApp(): Express {
     const app: Express = express();
 
     app.use(cors());
+    app.use(cookieParser());
     app.use(express.json());
     if (process.env.NODE_ENV !== 'test') {
         app.use(morgan('dev'));
@@ -22,7 +25,7 @@ export function createApp(): Express {
             await db.raw('SELECT 1');
             sendSuccess(res, {
                 status: 'healthy',
-                service: 'apip-seafreight-api',
+                service: 'seafreight-api',
                 database: 'connected',
                 timestamp: new Date().toISOString(),
             });
@@ -31,7 +34,10 @@ export function createApp(): Express {
         }
     });
 
-    // Scoped Auth & API routes
+    // Public Auth Routes
+    app.use('/v1/auth', authRouter);
+
+    // Protected Sea Freight Routes
     app.use('/v1/freight', authMiddleware, freightRouter);
 
     // 404 Handler

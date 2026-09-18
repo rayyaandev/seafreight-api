@@ -24,6 +24,10 @@ export const LoginRequestSchema = z.object({
     password: z.string().min(6),
 });
 
+export const RefreshTokenRequestSchema = z.object({
+    refresh_token: z.string().optional(),
+});
+
 // ----------------------------------------------------------------------------
 // Freight File Query & Mutation Schemas
 // ----------------------------------------------------------------------------

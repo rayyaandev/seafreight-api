@@ -113,6 +113,102 @@ export class FreightController {
         }
     }
 
+    public static async evaluateGates(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { gates: [] });
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async updateSpecialHandling(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { updated: true });
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async deleteContainer(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { deleted: true });
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async addFreightLine(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { id: 'stub-line-id' }, 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async deleteFreightLine(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { deleted: true });
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async addBillOfLading(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { id: 'stub-bol-id' }, 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async addDocument(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { id: 'stub-doc-id' }, 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async deleteDocument(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { deleted: true });
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async addNote(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { id: 'stub-note-id' }, 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async addMilestone(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { id: 'stub-milestone-id' }, 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async addCharge(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { id: 'stub-charge-id' }, 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async deleteCharge(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            sendSuccess(res, { deleted: true });
+        } catch (err) {
+            next(err);
+        }
+    }
+
     public static async getMetrics(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const { workspaceId } = req.context;
