@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  mariadb:
+    image: mariadb:11
+    container_name: seafreight-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+      MARIADB_DATABASE: ${DB_NAME:-apip_seafreight}
+      MARIADB_USER: ${DB_USER:-root}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-root}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: seafreight-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"   # AMQP protocol
+      - "15672:15672" # Management Web UI
+    environment:
+      RABBITMQ_DEFAULT_USER: ${MQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${MQ_PASSWORD:-guest}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  minio:
+    image: minio/minio
+    container_name: seafreight-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Web Console
+    environment:
+      MINIO_ROOT_USER: ${S3_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET:-minioadmin}
+    volumes:
+      - minio_data:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seafreight-api
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_USER: ${DB_USER:-root}
+      DB_PASSWORD: ${DB_PASSWORD:-root}
+      DB_NAME: ${DB_NAME:-apip_seafreight}
+      AMQP_URL: amqp://${MQ_USER:-guest}:${MQ_PASSWORD:-guest}@rabbitmq:5672
+      S3_ENDPOINT: http://minio:9000
+      S3_KEY: ${S3_KEY:-minioadmin}
+      S3_SECRET: ${S3_SECRET:-minioadmin}
+      JWT_SECRET: ${JWT_SECRET:-super-secret-sea-freight-jwt-key-2026}
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./:/app
+      - /app/node_modules
+
+volumes:
+  mariadb_data:
+  rabbitmq_data:
+  minio_data:
