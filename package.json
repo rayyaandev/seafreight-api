@@ -1,0 +1,32 @@
+{
+  "name": "api",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/server.ts",
+    "dev": "bun --watch src/server.ts",
+    "seed": "bun run src/db/seeds/01_sea_freight_seed.ts",
+    "test": "bun run test/integration.test.ts",
+    "migrate": "knex migrate:latest --knexfile src/db/knexfile.ts",
+    "migrate:rollback": "knex migrate:rollback --knexfile src/db/knexfile.ts",
+    "migrate:status": "knex migrate:list --knexfile src/db/knexfile.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/morgan": "^1.9.10",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.0",
+    "express": "^5.2.1",
+    "knex": "^3.3.0",
+    "morgan": "^1.12.1",
+    "mysql": "^2.18.1",
+    "zod": "^4.6.5"
+  }
+}
