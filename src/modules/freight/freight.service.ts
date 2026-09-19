@@ -1,18 +1,20 @@
 import { FreightRepository } from './freight.repository.js';
-import { SeaImportStateMachine } from './state-machine/import-state-machine.js';
-import { SeaExportStateMachine } from './state-machine/export-state-machine.js';
-import { SpecialHandlingEngine } from './state-machine/special-handling.js';
+import { evaluateAllGates, evaluateSpecialHandlingDetails } from './gates/index.js';
 import { AuditService } from '../audit/audit.service.js';
 import { AppError } from '../../utils/response.js';
+import { SpecialStatus, SpecialType } from '../../common/enums.js';
 import type {
     FreightFileEntity,
     FreightContainerEntity,
-    DrayageOrderEntity,
-    ExceptionCaseEntity,
+    FreightLineEntity,
+    BillOfLadingEntity,
     FileDocumentEntity,
-    SeaImportStatus,
-    SeaExportStatus,
-} from './state-machine/types.js';
+    FileNoteEntity,
+    DrayageOrderEntity,
+    MilestoneEntity,
+    ExceptionCaseEntity,
+    ChargeEntity,
+} from '../../common/types.js';
 
 export class FreightService {
     public static async listFiles(
@@ -21,10 +23,16 @@ export class FreightService {
             mode?: string;
             direction?: string;
             status?: string;
-            special_handling_status?: string;
-            carrier_name?: string;
+            customer_id?: string;
+            pol_id?: string;
+            pod_id?: string;
+            special_handling?: string;
+            special_status?: string;
+            eta_from?: string;
+            eta_to?: string;
             q?: string;
-            limit: number;
+            limit?: number;
+            offset?: number;
         }
     ) {
         return FreightRepository.listFiles(workspaceId, query);
@@ -36,23 +44,51 @@ export class FreightService {
             throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${id}' not found`);
         }
 
-        const [containers, drayageOrders, documents, exceptions] = await Promise.all([
+        const [
+            containers,
+            lines,
+            billsOfLading,
+            documents,
+            notes,
+            drayageOrders,
+            milestones,
+            exceptions,
+            charges,
+        ] = await Promise.all([
             FreightRepository.getContainers(id),
-            FreightRepository.getDrayageOrders(id),
+            FreightRepository.getLines(id),
+            FreightRepository.getBillsOfLading(id),
             FreightRepository.getDocuments(id),
+            FreightRepository.getNotes(id),
+            FreightRepository.getDrayageOrders(id),
+            FreightRepository.getMilestones(id),
             FreightRepository.getExceptions(id),
+            FreightRepository.getCharges(id),
         ]);
 
-        const compliance = SpecialHandlingEngine.evaluate(file.special_handling_type, containers);
+        const gateContext = { containers, lines, billsOfLading };
+        const gateEvaluation = evaluateAllGates(file, gateContext);
+        const specialHandlingEvaluation = evaluateSpecialHandlingDetails(file.special_handling, containers);
 
         return {
             ...file,
             containers,
-            drayage_orders: drayageOrders,
+            lines,
+            bills_of_lading: billsOfLading,
             documents,
+            notes,
+            drayage_orders: drayageOrders,
+            milestones,
             exceptions,
-            compliance_evaluation: compliance,
+            charges,
+            gates_summary: gateEvaluation,
+            special_handling_evaluation: specialHandlingEvaluation,
         };
+    }
+
+    public static async evaluateGates(id: string, workspaceId: string) {
+        const dossier = await this.getFileDossier(id, workspaceId);
+        return dossier.gates_summary;
     }
 
     public static async createFile(
@@ -61,9 +97,12 @@ export class FreightService {
         data: Partial<FreightFileEntity>
     ) {
         const mode = data.mode || 'sea';
-        const fileNo = await FreightRepository.generateHumanId(mode);
+        const fileNo = await FreightRepository.generateHumanId(mode as 'sea' | 'air');
 
-        const initialStatus = 'draft';
+        const initialStatus = 'Draft';
+        const specialType = data.special_handling || SpecialType.NONE;
+        const initialSpecialStatus = specialType !== SpecialType.NONE ? SpecialStatus.ORANGE : SpecialStatus.GREEN;
+
         const file = await FreightRepository.create({
             ...data,
             workspace_id: workspaceId,
@@ -71,7 +110,8 @@ export class FreightService {
             file_no: fileNo,
             mode,
             status: initialStatus,
-            special_status: 'GREEN',
+            special_handling: specialType,
+            special_status: initialSpecialStatus,
         });
 
         await AuditService.log({
@@ -107,7 +147,10 @@ export class FreightService {
             );
         }
 
-        const updated = await FreightRepository.update(id, workspaceId, version, updates);
+        // Prevent updating lifecycle status via direct PATCH
+        const { status: _ignoredStatus, ...sanitizedUpdates } = updates;
+
+        const updated = await FreightRepository.update(id, workspaceId, version, sanitizedUpdates);
         if (!updated) {
             throw new AppError(409, 'CONFLICT', 'Failed to update file due to a concurrent modification.');
         }
@@ -118,97 +161,67 @@ export class FreightService {
             entityType: 'freight_file',
             entityId: id,
             action: 'update',
-            payload: updates as Record<string, unknown>,
+            payload: sanitizedUpdates as Record<string, unknown>,
         });
 
         return updated;
     }
 
-    public static async transitionStatus(
+    public static async updateSpecialHandling(
         id: string,
         workspaceId: string,
         actorId: string,
-        version: number,
-        targetStatus: string,
-        reason?: string
+        version: number | undefined,
+        override: {
+            special_handling: SpecialType;
+            special_status?: SpecialStatus;
+            reason?: string;
+        }
     ) {
-        const file = await FreightRepository.findById(id, workspaceId);
-        if (!file) {
+        const current = await FreightRepository.findById(id, workspaceId);
+        if (!current) {
             throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${id}' not found`);
         }
 
-        if (file.version !== version) {
+        const targetVersion = version !== undefined && !isNaN(version) ? version : current.version;
+        if (current.version !== targetVersion) {
             throw new AppError(
                 409,
                 'CONFLICT',
-                `Conflict: file version is ${file.version}, but provided version was ${version}. Please refresh and try again.`
+                `Conflict: file version is ${current.version}, but provided version was ${version}.`
             );
         }
 
         const containers = await FreightRepository.getContainers(id);
+        const autoEval = evaluateSpecialHandlingDetails(override.special_handling, containers);
+        const targetSpecialStatus = override.special_status || autoEval.status;
 
-        let transitionResult: {
-            fromStatus: string;
-            toStatus: string;
-            actionTaken: string;
-            eventsToPublish: string[];
-            demurrageWarning?: boolean;
-        };
-
-        if (file.direction === 'import') {
-            transitionResult = SeaImportStateMachine.validateTransition(
-                file,
-                targetStatus as SeaImportStatus,
-                containers
-            );
-        } else {
-            transitionResult = SeaExportStateMachine.validateTransition(
-                file,
-                targetStatus as SeaExportStatus,
-                containers
-            );
-        }
-
-        const updated = await FreightRepository.update(id, workspaceId, version, {
-            status: targetStatus,
+        const updated = await FreightRepository.update(id, workspaceId, targetVersion, {
+            special_handling: override.special_handling,
+            special_status: targetSpecialStatus,
         });
-
-        if (!updated) {
-            throw new AppError(409, 'CONFLICT', 'Failed to update status due to a concurrent conflict.');
-        }
 
         await AuditService.log({
             workspaceId,
             actorId,
             entityType: 'freight_file',
             entityId: id,
-            action: 'transition',
-            fromState: transitionResult.fromStatus,
-            toState: transitionResult.toStatus,
+            action: 'special_handling_override',
             payload: {
-                reason,
-                actionTaken: transitionResult.actionTaken,
-                events: transitionResult.eventsToPublish,
+                previous_type: current.special_handling,
+                new_type: override.special_handling,
+                previous_status: current.special_status,
+                new_status: targetSpecialStatus,
+                reason: override.reason,
             },
         });
 
-        if (transitionResult.demurrageWarning) {
-            await FreightRepository.createException({
-                workspace_id: workspaceId,
-                freight_file_id: id,
-                type: 'demurrage_risk',
-                severity: 'warn',
-                title: 'Demurrage Free-Time Alert',
-                description: `Vessel has arrived and container free-time expires in under 48 hours (${file.free_time_expires_at}).`,
-            });
-        }
-
-        return {
-            file: updated,
-            transition: transitionResult,
-        };
+        return updated;
     }
 
+    // ------------------------------------------------------------------------
+    // Child Operations: Containers
+    // ------------------------------------------------------------------------
     public static async addContainer(
         freightFileId: string,
         workspaceId: string,
@@ -222,16 +235,18 @@ export class FreightService {
 
         const container = await FreightRepository.createContainer({
             ...containerData,
+            workspace_id: workspaceId,
+            created_by: actorId,
             freight_file_id: freightFileId,
         });
 
+        // Re-evaluate Special Handling status on parent dossier
         const allContainers = await FreightRepository.getContainers(freightFileId);
-        const evalResult = SpecialHandlingEngine.evaluate(file.special_handling_type, allContainers);
+        const evalResult = evaluateSpecialHandlingDetails(file.special_handling, allContainers);
 
-        // Update file special handling status if it changed
-        if (file.special_handling_status !== evalResult.status) {
+        if (file.special_status !== evalResult.status) {
             await FreightRepository.update(file.id, workspaceId, file.version, {
-                special_handling_status: evalResult.status,
+                special_status: evalResult.status,
             });
         }
 
@@ -247,6 +262,234 @@ export class FreightService {
         return container;
     }
 
+    public static async deleteContainer(
+        containerId: string,
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
+        }
+
+        const deleted = await FreightRepository.deleteContainer(containerId, freightFileId);
+        if (!deleted) {
+            throw new AppError(404, 'NOT_FOUND', `Container '${containerId}' not found on file '${freightFileId}'`);
+        }
+
+        const allContainers = await FreightRepository.getContainers(freightFileId);
+        const evalResult = evaluateSpecialHandlingDetails(file.special_handling, allContainers);
+
+        if (file.special_status !== evalResult.status) {
+            await FreightRepository.update(file.id, workspaceId, file.version, {
+                special_status: evalResult.status,
+            });
+        }
+
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'container',
+            entityId: containerId,
+            action: 'delete',
+            payload: { freight_file_id: freightFileId },
+        });
+
+        return { deleted: true };
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Freight Lines
+    // ------------------------------------------------------------------------
+    public static async addFreightLine(
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string,
+        lineData: Partial<FreightLineEntity>
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
+        }
+
+        const line = await FreightRepository.createLine({
+            ...lineData,
+            workspace_id: workspaceId,
+            created_by: actorId,
+            freight_file_id: freightFileId,
+        });
+
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'freight_line',
+            entityId: line.id,
+            action: 'create',
+            payload: { description: line.description, quantity: line.quantity },
+        });
+
+        return line;
+    }
+
+    public static async deleteFreightLine(
+        lineId: string,
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
+        }
+
+        const deleted = await FreightRepository.deleteLine(lineId, freightFileId);
+        if (!deleted) {
+            throw new AppError(404, 'NOT_FOUND', `Freight line '${lineId}' not found on file '${freightFileId}'`);
+        }
+
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'freight_line',
+            entityId: lineId,
+            action: 'delete',
+            payload: { freight_file_id: freightFileId },
+        });
+
+        return { deleted: true };
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Bill of Lading
+    // ------------------------------------------------------------------------
+    public static async addBillOfLading(
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string,
+        bolData: Partial<BillOfLadingEntity>
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
+        }
+
+        const bol = await FreightRepository.createBillOfLading({
+            ...bolData,
+            workspace_id: workspaceId,
+            created_by: actorId,
+            freight_file_id: freightFileId,
+        });
+
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'bill_of_lading',
+            entityId: bol.id,
+            action: 'create',
+            payload: { bl_number: bol.bl_number, type: bol.type },
+        });
+
+        return bol;
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Documents
+    // ------------------------------------------------------------------------
+    public static async addDocument(
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string,
+        docData: Partial<FileDocumentEntity>
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
+        }
+
+        const doc = await FreightRepository.createDocument({
+            ...docData,
+            workspace_id: workspaceId,
+            created_by: actorId,
+            freight_file_id: freightFileId,
+        });
+
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'file_document',
+            entityId: doc.id,
+            action: 'create',
+            payload: { doc_type: doc.doc_type, file_name: doc.file_name },
+        });
+
+        return doc;
+    }
+
+    public static async deleteDocument(
+        docId: string,
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
+        }
+
+        const deleted = await FreightRepository.deleteDocument(docId, freightFileId);
+        if (!deleted) {
+            throw new AppError(404, 'NOT_FOUND', `Document '${docId}' not found on file '${freightFileId}'`);
+        }
+
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'file_document',
+            entityId: docId,
+            action: 'delete',
+            payload: { freight_file_id: freightFileId },
+        });
+
+        return { deleted: true };
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Notes
+    // ------------------------------------------------------------------------
+    public static async addNote(
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string,
+        noteData: Partial<FileNoteEntity>
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
+        }
+
+        const note = await FreightRepository.createNote({
+            ...noteData,
+            workspace_id: workspaceId,
+            created_by: actorId,
+            freight_file_id: freightFileId,
+        });
+
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'file_note',
+            entityId: note.id,
+            action: 'create',
+            payload: { show_on_open: note.show_on_open },
+        });
+
+        return note;
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Drayage Orders
+    // ------------------------------------------------------------------------
     public static async addDrayageOrder(
         freightFileId: string,
         workspaceId: string,
@@ -263,6 +506,8 @@ export class FreightService {
 
         const order = await FreightRepository.createDrayageOrder({
             ...orderData,
+            workspace_id: workspaceId,
+            created_by: actorId,
             freight_file_id: freightFileId,
             order_number: orderNumber,
             status: 'draft',
@@ -280,6 +525,42 @@ export class FreightService {
         return order;
     }
 
+    // ------------------------------------------------------------------------
+    // Child Operations: Milestones
+    // ------------------------------------------------------------------------
+    public static async addMilestone(
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string,
+        milestoneData: Partial<MilestoneEntity>
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
+        }
+
+        const milestone = await FreightRepository.createMilestone({
+            ...milestoneData,
+            workspace_id: workspaceId,
+            created_by: actorId,
+            freight_file_id: freightFileId,
+        });
+
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'milestone',
+            entityId: milestone.id,
+            action: 'create',
+            payload: { milestone_type: milestone.milestone_type },
+        });
+
+        return milestone;
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Exception Cases
+    // ------------------------------------------------------------------------
     public static async addExceptionCase(
         freightFileId: string,
         workspaceId: string,
@@ -294,8 +575,9 @@ export class FreightService {
         const exception = await FreightRepository.createException({
             ...caseData,
             workspace_id: workspaceId,
+            created_by: actorId,
             freight_file_id: freightFileId,
-            status: 'open',
+            status: 'Open',
         });
 
         await AuditService.log({
@@ -310,6 +592,70 @@ export class FreightService {
         return exception;
     }
 
+    // ------------------------------------------------------------------------
+    // Child Operations: Charges
+    // ------------------------------------------------------------------------
+    public static async addCharge(
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string,
+        chargeData: Partial<ChargeEntity>
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
+        }
+
+        const charge = await FreightRepository.createCharge({
+            ...chargeData,
+            workspace_id: workspaceId,
+            created_by: actorId,
+            freight_file_id: freightFileId,
+        });
+
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'charge',
+            entityId: charge.id,
+            action: 'create',
+            payload: { line_type: charge.line_type, service_name: charge.service_name, amount: charge.amount },
+        });
+
+        return charge;
+    }
+
+    public static async deleteCharge(
+        chargeId: string,
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
+        }
+
+        const deleted = await FreightRepository.deleteCharge(chargeId, freightFileId);
+        if (!deleted) {
+            throw new AppError(404, 'NOT_FOUND', `Charge '${chargeId}' not found on file '${freightFileId}'`);
+        }
+
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'charge',
+            entityId: chargeId,
+            action: 'delete',
+            payload: { freight_file_id: freightFileId },
+        });
+
+        return { deleted: true };
+    }
+
+    // ------------------------------------------------------------------------
+    // Metrics
+    // ------------------------------------------------------------------------
     public static async getMetrics(workspaceId: string) {
         return FreightRepository.getMetrics(workspaceId);
     }

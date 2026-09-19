@@ -3,10 +3,15 @@ import db from '../../db/connection.js';
 import type {
     FreightFileEntity,
     FreightContainerEntity,
-    DrayageOrderEntity,
+    FreightLineEntity,
+    BillOfLadingEntity,
     FileDocumentEntity,
+    FileNoteEntity,
+    DrayageOrderEntity,
+    MilestoneEntity,
     ExceptionCaseEntity,
-} from './state-machine/types.js';
+    ChargeEntity,
+} from '../../common/types.js';
 
 export class FreightRepository {
     public static async generateHumanId(mode: 'sea' | 'air', year = new Date().getFullYear()): Promise<string> {
@@ -21,6 +26,9 @@ export class FreightRepository {
         return `${prefix}-${year}-${String(seq).padStart(5, '0')}`;
     }
 
+    // ------------------------------------------------------------------------
+    // Freight File Operations
+    // ------------------------------------------------------------------------
     public static async findById(id: string, workspaceId: string): Promise<FreightFileEntity | null> {
         const row = await db<FreightFileEntity>('freight_file')
             .where({ id, workspace_id: workspaceId })
@@ -35,10 +43,16 @@ export class FreightRepository {
             mode?: string;
             direction?: string;
             status?: string;
-            special_handling_status?: string;
-            carrier_name?: string;
+            customer_id?: string;
+            pol_id?: string;
+            pod_id?: string;
+            special_handling?: string;
+            special_status?: string;
+            eta_from?: string;
+            eta_to?: string;
             q?: string;
-            limit: number;
+            limit?: number;
+            offset?: number;
         }
     ): Promise<{ data: FreightFileEntity[]; total: number }> {
         const query = db<FreightFileEntity>('freight_file')
@@ -48,22 +62,29 @@ export class FreightRepository {
         if (filters.mode) query.where('mode', filters.mode);
         if (filters.direction) query.where('direction', filters.direction);
         if (filters.status) query.where('status', filters.status);
-        if (filters.special_handling_status) query.where('special_handling_status', filters.special_handling_status);
-        if (filters.carrier_name) query.whereILike('carrier_name', `%${filters.carrier_name}%`);
+        if (filters.customer_id) query.where('customer_id', filters.customer_id);
+        if (filters.pol_id) query.where('pol_id', filters.pol_id);
+        if (filters.pod_id) query.where('pod_id', filters.pod_id);
+        if (filters.special_handling) query.where('special_handling', filters.special_handling);
+        if (filters.special_status) query.where('special_status', filters.special_status);
+        if (filters.eta_from) query.where('eta', '>=', filters.eta_from);
+        if (filters.eta_to) query.where('eta', '<=', filters.eta_to);
+
         if (filters.q) {
             query.andWhere((builder) => {
                 builder
-                    .whereILike('human_id', `%${filters.q}%`)
-                    .orWhereILike('shipper_name', `%${filters.q}%`)
-                    .orWhereILike('consignee_name', `%${filters.q}%`)
-                    .orWhereILike('vessel_name', `%${filters.q}%`)
-                    .orWhereILike('voyage_number', `%${filters.q}%`);
+                    .whereILike('file_no', `%${filters.q}%`)
+                    .orWhereILike('vessel', `%${filters.q}%`)
+                    .orWhereILike('voyage', `%${filters.q}%`)
+                    .orWhereILike('declaration_id', `%${filters.q}%`)
+                    .orWhereILike('mrn', `%${filters.q}%`);
             });
         }
 
         const countQuery = query.clone().count<{ total: number }>('id as total').first();
         const limit = Number(filters.limit) || 20;
-        const rowsQuery = query.clone().orderBy('created_at', 'desc').limit(limit);
+        const offset = Number(filters.offset) || 0;
+        const rowsQuery = query.clone().orderBy('created_at', 'desc').limit(limit).offset(offset);
 
         const [countRes, rows] = await Promise.all([countQuery, rowsQuery]);
         return {
@@ -106,6 +127,19 @@ export class FreightRepository {
         return (await db<FreightFileEntity>('freight_file').where({ id }).first()) || null;
     }
 
+    public static async deleteFile(id: string, workspaceId: string): Promise<boolean> {
+        const affected = await db('freight_file')
+            .where({ id, workspace_id: workspaceId })
+            .update({
+                deleted_at: db.fn.now(),
+                updated_at: db.fn.now(),
+            });
+        return affected > 0;
+    }
+
+    // ------------------------------------------------------------------------
+    // Containers
+    // ------------------------------------------------------------------------
     public static async getContainers(freightFileId: string): Promise<FreightContainerEntity[]> {
         return db<FreightContainerEntity>('freight_container')
             .where('freight_file_id', freightFileId)
@@ -117,12 +151,121 @@ export class FreightRepository {
         await db('freight_container').insert({
             ...data,
             id,
+            version: 1,
             created_at: db.fn.now(),
             updated_at: db.fn.now(),
         });
         return (await db<FreightContainerEntity>('freight_container').where('id', id).first())!;
     }
 
+    public static async deleteContainer(containerId: string, freightFileId: string): Promise<boolean> {
+        const affected = await db('freight_container')
+            .where({ id: containerId, freight_file_id: freightFileId })
+            .del();
+        return affected > 0;
+    }
+
+    // ------------------------------------------------------------------------
+    // Freight Lines (Cargo goods items)
+    // ------------------------------------------------------------------------
+    public static async getLines(freightFileId: string): Promise<FreightLineEntity[]> {
+        return db<FreightLineEntity>('freight_line')
+            .where('freight_file_id', freightFileId)
+            .orderBy('created_at', 'asc');
+    }
+
+    public static async createLine(data: Partial<FreightLineEntity>): Promise<FreightLineEntity> {
+        const id = data.id || randomUUID();
+        await db('freight_line').insert({
+            ...data,
+            id,
+            version: 1,
+            created_at: db.fn.now(),
+            updated_at: db.fn.now(),
+        });
+        return (await db<FreightLineEntity>('freight_line').where('id', id).first())!;
+    }
+
+    public static async deleteLine(lineId: string, freightFileId: string): Promise<boolean> {
+        const affected = await db('freight_line')
+            .where({ id: lineId, freight_file_id: freightFileId })
+            .del();
+        return affected > 0;
+    }
+
+    // ------------------------------------------------------------------------
+    // Bills of Lading
+    // ------------------------------------------------------------------------
+    public static async getBillsOfLading(freightFileId: string): Promise<BillOfLadingEntity[]> {
+        return db<BillOfLadingEntity>('bill_of_lading')
+            .where('freight_file_id', freightFileId)
+            .orderBy('created_at', 'asc');
+    }
+
+    public static async createBillOfLading(data: Partial<BillOfLadingEntity>): Promise<BillOfLadingEntity> {
+        const id = data.id || randomUUID();
+        await db('bill_of_lading').insert({
+            ...data,
+            id,
+            version: 1,
+            created_at: db.fn.now(),
+            updated_at: db.fn.now(),
+        });
+        return (await db<BillOfLadingEntity>('bill_of_lading').where('id', id).first())!;
+    }
+
+    // ------------------------------------------------------------------------
+    // Documents
+    // ------------------------------------------------------------------------
+    public static async getDocuments(freightFileId: string): Promise<FileDocumentEntity[]> {
+        return db<FileDocumentEntity>('file_document')
+            .where('freight_file_id', freightFileId)
+            .orderBy('created_at', 'asc');
+    }
+
+    public static async createDocument(data: Partial<FileDocumentEntity>): Promise<FileDocumentEntity> {
+        const id = data.id || randomUUID();
+        await db('file_document').insert({
+            ...data,
+            id,
+            version: 1,
+            created_at: db.fn.now(),
+            updated_at: db.fn.now(),
+        });
+        return (await db<FileDocumentEntity>('file_document').where('id', id).first())!;
+    }
+
+    public static async deleteDocument(docId: string, freightFileId: string): Promise<boolean> {
+        const affected = await db('file_document')
+            .where({ id: docId, freight_file_id: freightFileId })
+            .del();
+        return affected > 0;
+    }
+
+    // ------------------------------------------------------------------------
+    // Notes
+    // ------------------------------------------------------------------------
+    public static async getNotes(freightFileId: string): Promise<FileNoteEntity[]> {
+        return db<FileNoteEntity>('file_note')
+            .where('freight_file_id', freightFileId)
+            .orderBy('created_at', 'asc');
+    }
+
+    public static async createNote(data: Partial<FileNoteEntity>): Promise<FileNoteEntity> {
+        const id = data.id || randomUUID();
+        await db('file_note').insert({
+            ...data,
+            id,
+            version: 1,
+            created_at: db.fn.now(),
+            updated_at: db.fn.now(),
+        });
+        return (await db<FileNoteEntity>('file_note').where('id', id).first())!;
+    }
+
+    // ------------------------------------------------------------------------
+    // Drayage Transport Orders
+    // ------------------------------------------------------------------------
     public static async getDrayageOrders(freightFileId: string): Promise<DrayageOrderEntity[]> {
         return db<DrayageOrderEntity>('drayage_order')
             .where('freight_file_id', freightFileId)
@@ -134,18 +277,37 @@ export class FreightRepository {
         await db('drayage_order').insert({
             ...data,
             id,
+            version: 1,
             created_at: db.fn.now(),
             updated_at: db.fn.now(),
         });
         return (await db<DrayageOrderEntity>('drayage_order').where('id', id).first())!;
     }
 
-    public static async getDocuments(freightFileId: string): Promise<FileDocumentEntity[]> {
-        return db<FileDocumentEntity>('file_document')
+    // ------------------------------------------------------------------------
+    // Milestones
+    // ------------------------------------------------------------------------
+    public static async getMilestones(freightFileId: string): Promise<MilestoneEntity[]> {
+        return db<MilestoneEntity>('milestone')
             .where('freight_file_id', freightFileId)
-            .orderBy('created_at', 'asc');
+            .orderBy('timestamp', 'asc');
     }
 
+    public static async createMilestone(data: Partial<MilestoneEntity>): Promise<MilestoneEntity> {
+        const id = data.id || randomUUID();
+        await db('milestone').insert({
+            ...data,
+            id,
+            version: 1,
+            created_at: db.fn.now(),
+            updated_at: db.fn.now(),
+        });
+        return (await db<MilestoneEntity>('milestone').where('id', id).first())!;
+    }
+
+    // ------------------------------------------------------------------------
+    // Exception Cases
+    // ------------------------------------------------------------------------
     public static async getExceptions(freightFileId: string): Promise<ExceptionCaseEntity[]> {
         return db<ExceptionCaseEntity>('exception_case')
             .where('freight_file_id', freightFileId)
@@ -157,12 +319,44 @@ export class FreightRepository {
         await db('exception_case').insert({
             ...data,
             id,
+            version: 1,
             created_at: db.fn.now(),
             updated_at: db.fn.now(),
         });
         return (await db<ExceptionCaseEntity>('exception_case').where('id', id).first())!;
     }
 
+    // ------------------------------------------------------------------------
+    // Charges (Sell & Buy)
+    // ------------------------------------------------------------------------
+    public static async getCharges(freightFileId: string): Promise<ChargeEntity[]> {
+        return db<ChargeEntity>('charge')
+            .where('freight_file_id', freightFileId)
+            .orderBy('created_at', 'asc');
+    }
+
+    public static async createCharge(data: Partial<ChargeEntity>): Promise<ChargeEntity> {
+        const id = data.id || randomUUID();
+        await db('charge').insert({
+            ...data,
+            id,
+            version: 1,
+            created_at: db.fn.now(),
+            updated_at: db.fn.now(),
+        });
+        return (await db<ChargeEntity>('charge').where('id', id).first())!;
+    }
+
+    public static async deleteCharge(chargeId: string, freightFileId: string): Promise<boolean> {
+        const affected = await db('charge')
+            .where({ id: chargeId, freight_file_id: freightFileId })
+            .del();
+        return affected > 0;
+    }
+
+    // ------------------------------------------------------------------------
+    // Metrics
+    // ------------------------------------------------------------------------
     public static async getMetrics(workspaceId: string) {
         const stats = await db('freight_file')
             .where('workspace_id', workspaceId)
@@ -172,8 +366,8 @@ export class FreightRepository {
                 db.raw('COUNT(id) as total_active'),
                 db.raw("SUM(CASE WHEN direction = 'import' THEN 1 ELSE 0 END) as total_import"),
                 db.raw("SUM(CASE WHEN direction = 'export' THEN 1 ELSE 0 END) as total_export"),
-                db.raw("SUM(CASE WHEN special_handling_status = 'red' THEN 1 ELSE 0 END) as red_alerts"),
-                db.raw("SUM(CASE WHEN status = 'arrived' AND free_time_expires_at <= DATE_ADD(NOW(), INTERVAL 2 DAY) THEN 1 ELSE 0 END) as demurrage_risks")
+                db.raw("SUM(CASE WHEN special_status = 'RED' THEN 1 ELSE 0 END) as red_alerts"),
+                db.raw("SUM(CASE WHEN status = 'Arrived' THEN 1 ELSE 0 END) as arrived_shipments")
             )
             .first();
 

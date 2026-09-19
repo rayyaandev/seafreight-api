@@ -3,11 +3,14 @@ import { FreightService } from './freight.service.js';
 import { sendSuccess } from '../../utils/response.js';
 
 export class FreightController {
+    // ------------------------------------------------------------------------
+    // Freight File Dossier Endpoints
+    // ------------------------------------------------------------------------
     public static async listFiles(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const { workspaceId } = req.context;
             const result = await FreightService.listFiles(workspaceId, req.query as any);
-            sendSuccess(res, result.data, 200, { total: result.total });
+            sendSuccess(res, result.data, 200, { total: result.total, limit: Number(req.query.limit) || 20 });
         } catch (err) {
             next(err);
         }
@@ -41,7 +44,7 @@ export class FreightController {
                 req.params.id as string,
                 workspaceId,
                 actorId,
-                version,
+                Number(version),
                 updates
             );
             sendSuccess(res, updated);
@@ -50,24 +53,36 @@ export class FreightController {
         }
     }
 
-    public static async transitionState(req: Request, res: Response, next: NextFunction): Promise<void> {
+    public static async evaluateGates(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
-            const { workspaceId, actorId } = req.context;
-            const { target_status, version, reason } = req.body;
-            const result = await FreightService.transitionStatus(
-                req.params.id as string,
-                workspaceId,
-                actorId,
-                version,
-                target_status,
-                reason
-            );
-            sendSuccess(res, result);
+            const { workspaceId } = req.context;
+            const gates = await FreightService.evaluateGates(req.params.id as string, workspaceId);
+            sendSuccess(res, gates);
         } catch (err) {
             next(err);
         }
     }
 
+    public static async updateSpecialHandling(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, special_handling, special_status, reason } = req.body;
+            const updated = await FreightService.updateSpecialHandling(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                version !== undefined ? Number(version) : undefined,
+                { special_handling, special_status, reason }
+            );
+            sendSuccess(res, updated);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Containers
+    // ------------------------------------------------------------------------
     public static async addContainer(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const { workspaceId, actorId } = req.context;
@@ -83,6 +98,126 @@ export class FreightController {
         }
     }
 
+    public static async deleteContainer(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const result = await FreightService.deleteContainer(
+                req.params.containerId as string,
+                req.params.id as string,
+                workspaceId,
+                actorId
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Freight Lines
+    // ------------------------------------------------------------------------
+    public static async addFreightLine(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const line = await FreightService.addFreightLine(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                req.body
+            );
+            sendSuccess(res, line, 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async deleteFreightLine(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const result = await FreightService.deleteFreightLine(
+                req.params.lineId as string,
+                req.params.id as string,
+                workspaceId,
+                actorId
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Bills of Lading
+    // ------------------------------------------------------------------------
+    public static async addBillOfLading(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const bol = await FreightService.addBillOfLading(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                req.body
+            );
+            sendSuccess(res, bol, 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Documents
+    // ------------------------------------------------------------------------
+    public static async addDocument(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const doc = await FreightService.addDocument(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                req.body
+            );
+            sendSuccess(res, doc, 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async deleteDocument(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const result = await FreightService.deleteDocument(
+                req.params.docId as string,
+                req.params.id as string,
+                workspaceId,
+                actorId
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Notes
+    // ------------------------------------------------------------------------
+    public static async addNote(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const note = await FreightService.addNote(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                req.body
+            );
+            sendSuccess(res, note, 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Drayage Orders
+    // ------------------------------------------------------------------------
     public static async addDrayageOrder(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const { workspaceId, actorId } = req.context;
@@ -98,6 +233,27 @@ export class FreightController {
         }
     }
 
+    // ------------------------------------------------------------------------
+    // Child Operations: Milestones
+    // ------------------------------------------------------------------------
+    public static async addMilestone(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const milestone = await FreightService.addMilestone(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                req.body
+            );
+            sendSuccess(res, milestone, 201);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Child Operations: Exception Cases
+    // ------------------------------------------------------------------------
     public static async addExceptionCase(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const { workspaceId, actorId } = req.context;
@@ -113,89 +269,19 @@ export class FreightController {
         }
     }
 
-    public static async evaluateGates(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            sendSuccess(res, { gates: [] });
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    public static async updateSpecialHandling(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            sendSuccess(res, { updated: true });
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    public static async deleteContainer(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            sendSuccess(res, { deleted: true });
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    public static async addFreightLine(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            sendSuccess(res, { id: 'stub-line-id' }, 201);
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    public static async deleteFreightLine(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            sendSuccess(res, { deleted: true });
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    public static async addBillOfLading(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            sendSuccess(res, { id: 'stub-bol-id' }, 201);
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    public static async addDocument(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            sendSuccess(res, { id: 'stub-doc-id' }, 201);
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    public static async deleteDocument(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            sendSuccess(res, { deleted: true });
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    public static async addNote(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            sendSuccess(res, { id: 'stub-note-id' }, 201);
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    public static async addMilestone(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            sendSuccess(res, { id: 'stub-milestone-id' }, 201);
-        } catch (err) {
-            next(err);
-        }
-    }
-
+    // ------------------------------------------------------------------------
+    // Child Operations: Charges
+    // ------------------------------------------------------------------------
     public static async addCharge(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
-            sendSuccess(res, { id: 'stub-charge-id' }, 201);
+            const { workspaceId, actorId } = req.context;
+            const charge = await FreightService.addCharge(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                req.body
+            );
+            sendSuccess(res, charge, 201);
         } catch (err) {
             next(err);
         }
@@ -203,12 +289,22 @@ export class FreightController {
 
     public static async deleteCharge(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
-            sendSuccess(res, { deleted: true });
+            const { workspaceId, actorId } = req.context;
+            const result = await FreightService.deleteCharge(
+                req.params.chargeId as string,
+                req.params.id as string,
+                workspaceId,
+                actorId
+            );
+            sendSuccess(res, result);
         } catch (err) {
             next(err);
         }
     }
 
+    // ------------------------------------------------------------------------
+    // Metrics
+    // ------------------------------------------------------------------------
     public static async getMetrics(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const { workspaceId } = req.context;

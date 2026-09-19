@@ -19,6 +19,9 @@ import {
 
 export const freightRouter = Router();
 
+// Metrics KPI Endpoint
+freightRouter.get('/metrics', requirePermission('freight.file.read'), FreightController.getMetrics);
+
 // Dossier CRUD & Gates
 freightRouter.get('/files', validateQuery(ListFreightFilesQuerySchema), requirePermission('freight.file.read'), FreightController.listFiles);
 freightRouter.post('/files', validateBody(CreateFreightFileSchema), requirePermission('freight.file.create'), FreightController.createFile);

@@ -6,7 +6,9 @@
     "start": "bun run src/server.ts",
     "dev": "bun --watch src/server.ts",
     "seed": "bun run src/db/seeds/01_sea_freight_seed.ts",
-    "test": "bun run test/integration.test.ts",
+    "test": "bun run test/auth.test.ts && bun run test/freight.test.ts",
+    "test:auth": "bun run test/auth.test.ts",
+    "test:freight": "bun run test/freight.test.ts",
     "migrate": "bun run src/db/migrate.ts",
     "migrate:rollback": "knex migrate:rollback --knexfile src/db/knexfile.ts",
     "migrate:status": "knex migrate:list --knexfile src/db/knexfile.ts"

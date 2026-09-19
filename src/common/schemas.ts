@@ -100,10 +100,12 @@ export const RecordAtaSchema = z.object({
 });
 
 export const SpecialHandlingOverrideSchema = z.object({
+    version: z.number().int().positive().optional(),
     special_handling: z.enum([SpecialType.NONE, SpecialType.IMDG, SpecialType.REEFER, SpecialType.OOG]),
     special_status: z.enum([SpecialStatus.GREEN, SpecialStatus.ORANGE, SpecialStatus.RED]),
     reason: z.string().optional(),
 });
+
 
 // ----------------------------------------------------------------------------
 // Child Entity Schemas
