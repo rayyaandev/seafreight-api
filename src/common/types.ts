@@ -308,3 +308,43 @@ export interface TargetEntity extends BaseEntity {
     effective_from: Date | string;
     effective_to?: Date | string | null;
 }
+
+export interface FreightMetricsResponse {
+    // Legacy top-level aliases for test compatibility
+    total_active: number;
+    total_import: number;
+    total_export: number;
+    red_alerts: number;
+    arrived_shipments: number;
+
+    // Rich Dashboard KPI Tiles (per Implementation Guide)
+    tiles: {
+        open_files: number;
+        awaiting_release: number;
+        arriving_this_week: number;
+        demurrage_at_risk: number;
+        blocked_by_gate: number;
+        open_exceptions: number;
+    };
+    breakdown: {
+        by_direction: {
+            import: number;
+            export: number;
+        };
+        by_status: Record<string, number>;
+        by_special_status: {
+            green: number;
+            orange: number;
+            red: number;
+        };
+    };
+    recent_alerts: Array<{
+        id: string;
+        file_id: string;
+        file_no: string;
+        gate_code?: string | null;
+        title: string;
+        severity: string;
+        created_at: string;
+    }>;
+}

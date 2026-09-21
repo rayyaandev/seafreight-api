@@ -57,6 +57,26 @@ describe('Freight Dossier & Child Entities', () => {
       const data = await json(res);
       expect(Number(data.data.total_active)).toBeGreaterThanOrEqual(4);
     });
+
+    it('Metrics returns complete KPI tiles and breakdown per Implementation Guide', async () => {
+      const res = await fetch(`${baseUrl}/v1/freight/metrics`, { headers });
+      const data = await json(res);
+      expect(data.data).toHaveProperty('tiles');
+      expect(data.data.tiles).toHaveProperty('open_files');
+      expect(data.data.tiles).toHaveProperty('awaiting_release');
+      expect(data.data.tiles).toHaveProperty('arriving_this_week');
+      expect(data.data.tiles).toHaveProperty('demurrage_at_risk');
+      expect(data.data.tiles).toHaveProperty('blocked_by_gate');
+      expect(data.data.tiles).toHaveProperty('open_exceptions');
+
+      expect(data.data).toHaveProperty('breakdown');
+      expect(data.data.breakdown).toHaveProperty('by_direction');
+      expect(data.data.breakdown).toHaveProperty('by_status');
+      expect(data.data.breakdown).toHaveProperty('by_special_status');
+
+      expect(data.data).toHaveProperty('recent_alerts');
+      expect(Array.isArray(data.data.recent_alerts)).toBe(true);
+    });
   });
 
   // ── 2. List & Filter ───────────────────────────────────────────────────

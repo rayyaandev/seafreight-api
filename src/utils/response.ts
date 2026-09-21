@@ -5,6 +5,7 @@ export interface ApiResponse<T> {
     page?: {
         next_cursor?: string | null;
         total?: number;
+        limit?: number;
     };
 }
 

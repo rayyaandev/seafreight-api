@@ -11,6 +11,7 @@ import type {
     MilestoneEntity,
     ExceptionCaseEntity,
     ChargeEntity,
+    FreightMetricsResponse,
 } from '../../common/types.js';
 
 function sanitizeDates<T extends Record<string, any>>(obj: T): T {
@@ -420,20 +421,135 @@ export class FreightRepository {
     // ------------------------------------------------------------------------
     // Metrics
     // ------------------------------------------------------------------------
-    public static async getMetrics(workspaceId: string) {
-        const stats = await db('freight_file')
-            .where('workspace_id', workspaceId)
-            .where('mode', 'sea')
-            .whereNull('deleted_at')
-            .select(
-                db.raw('COUNT(id) as total_active'),
-                db.raw("SUM(CASE WHEN direction = 'import' THEN 1 ELSE 0 END) as total_import"),
-                db.raw("SUM(CASE WHEN direction = 'export' THEN 1 ELSE 0 END) as total_export"),
-                db.raw("SUM(CASE WHEN special_status = 'RED' THEN 1 ELSE 0 END) as red_alerts"),
-                db.raw("SUM(CASE WHEN status = 'Arrived' THEN 1 ELSE 0 END) as arrived_shipments")
-            )
-            .first();
+    public static async getMetrics(workspaceId: string): Promise<FreightMetricsResponse> {
+        const now = new Date();
+        const weekFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        const nowIso = now.toISOString().slice(0, 19).replace('T', ' ');
+        const weekFromNowIso = weekFromNow.toISOString().slice(0, 19).replace('T', ' ');
 
-        return stats;
+        // 1. Aggregated file statistics
+        const [fileStats, statusRows, specialStatusRows, exceptionStats, recentAlerts] = await Promise.all([
+            db('freight_file')
+                .where('workspace_id', workspaceId)
+                .where('mode', 'sea')
+                .whereNull('deleted_at')
+                .select(
+                    db.raw('COUNT(id) as total_active'),
+                    db.raw("SUM(CASE WHEN direction = 'import' THEN 1 ELSE 0 END) as total_import"),
+                    db.raw("SUM(CASE WHEN direction = 'export' THEN 1 ELSE 0 END) as total_export"),
+                    db.raw("SUM(CASE WHEN special_status = 'RED' THEN 1 ELSE 0 END) as red_alerts"),
+                    db.raw("SUM(CASE WHEN status = 'Arrived' THEN 1 ELSE 0 END) as arrived_shipments"),
+                    db.raw("SUM(CASE WHEN status NOT IN ('Closed', 'Delivered') THEN 1 ELSE 0 END) as open_files"),
+                    db.raw("SUM(CASE WHEN direction = 'import' AND status IN ('ReleasePending', 'Arrived') AND (container_release_received_at IS NULL OR declaration_status != 'accepted') THEN 1 ELSE 0 END) as awaiting_release"),
+                    db.raw(`SUM(CASE WHEN eta BETWEEN '${nowIso}' AND '${weekFromNowIso}' AND status NOT IN ('Closed', 'Delivered') THEN 1 ELSE 0 END) as arriving_this_week`),
+                    db.raw("SUM(CASE WHEN direction = 'import' AND ata IS NOT NULL AND status NOT IN ('Closed', 'Delivered') AND DATE_ADD(ata, INTERVAL free_time_days DAY) <= DATE_ADD(NOW(), INTERVAL 2 DAY) THEN 1 ELSE 0 END) as demurrage_at_risk")
+                )
+                .first(),
+
+            // 2. Breakdown by status
+            db('freight_file')
+                .where('workspace_id', workspaceId)
+                .where('mode', 'sea')
+                .whereNull('deleted_at')
+                .groupBy('status')
+                .select('status', db.raw('COUNT(id) as count')),
+
+            // 3. Breakdown by special_status
+            db('freight_file')
+                .where('workspace_id', workspaceId)
+                .where('mode', 'sea')
+                .whereNull('deleted_at')
+                .groupBy('special_status')
+                .select('special_status', db.raw('COUNT(id) as count')),
+
+            // 4. Exceptions stats
+            db('exception_case')
+                .where('workspace_id', workspaceId)
+                .whereIn('status', ['Open', 'InProgress'])
+                .select(
+                    db.raw('COUNT(id) as total_open'),
+                    db.raw("SUM(CASE WHEN gate_code IS NOT NULL THEN 1 ELSE 0 END) as gate_blocked")
+                )
+                .first(),
+
+            // 5. Recent open alerts for operations
+            db('exception_case')
+                .join('freight_file', 'exception_case.freight_file_id', 'freight_file.id')
+                .where('exception_case.workspace_id', workspaceId)
+                .whereIn('exception_case.status', ['Open', 'InProgress'])
+                .orderBy('exception_case.created_at', 'desc')
+                .limit(5)
+                .select(
+                    'exception_case.id',
+                    'exception_case.freight_file_id as file_id',
+                    'freight_file.file_no',
+                    'exception_case.gate_code',
+                    'exception_case.title',
+                    'exception_case.severity',
+                    'exception_case.created_at'
+                )
+        ]);
+
+        const byStatus: Record<string, number> = {};
+        for (const row of (statusRows || [])) {
+            byStatus[row.status] = Number(row.count) || 0;
+        }
+
+        const bySpecialStatus = { green: 0, orange: 0, red: 0 };
+        for (const row of (specialStatusRows || [])) {
+            const key = (row.special_status || '').toLowerCase() as 'green' | 'orange' | 'red';
+            if (key in bySpecialStatus) {
+                bySpecialStatus[key] = Number(row.count) || 0;
+            }
+        }
+
+        const totalActive = Number(fileStats?.total_active) || 0;
+        const totalImport = Number(fileStats?.total_import) || 0;
+        const totalExport = Number(fileStats?.total_export) || 0;
+        const redAlerts = Number(fileStats?.red_alerts) || 0;
+        const arrivedShipments = Number(fileStats?.arrived_shipments) || 0;
+        const openFiles = Number(fileStats?.open_files) || 0;
+        const awaitingRelease = Number(fileStats?.awaiting_release) || 0;
+        const arrivingThisWeek = Number(fileStats?.arriving_this_week) || 0;
+        const demurrageAtRisk = Number(fileStats?.demurrage_at_risk) || 0;
+        const openExceptions = Number(exceptionStats?.total_open) || 0;
+        const gateBlocked = Number(exceptionStats?.gate_blocked) || 0;
+        const blockedByGate = Math.max(redAlerts, gateBlocked);
+
+        return {
+            // Legacy aliases for test compatibility
+            total_active: totalActive,
+            total_import: totalImport,
+            total_export: totalExport,
+            red_alerts: redAlerts,
+            arrived_shipments: arrivedShipments,
+
+            // Rich Dashboard KPI tiles per Implementation Guide
+            tiles: {
+                open_files: openFiles,
+                awaiting_release: awaitingRelease,
+                arriving_this_week: arrivingThisWeek,
+                demurrage_at_risk: demurrageAtRisk,
+                blocked_by_gate: blockedByGate,
+                open_exceptions: openExceptions,
+            },
+            breakdown: {
+                by_direction: {
+                    import: totalImport,
+                    export: totalExport,
+                },
+                by_status: byStatus,
+                by_special_status: bySpecialStatus,
+            },
+            recent_alerts: (recentAlerts || []).map((a: any) => ({
+                id: a.id,
+                file_id: a.file_id,
+                file_no: a.file_no,
+                gate_code: a.gate_code,
+                title: a.title,
+                severity: a.severity,
+                created_at: a.created_at,
+            })),
+        };
     }
 }
