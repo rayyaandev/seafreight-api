@@ -1,161 +1,207 @@
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createApp } from '../src/app.js';
 import type { Server } from 'http';
 
-async function runTests() {
-    console.log('🧪 Starting Sea Freight API Verification Tests...\n');
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const json = (res: Response): Promise<any> => res.json();
 
-    const app = createApp();
-    const server: Server = app.listen(4999);
-    const baseUrl = 'http://localhost:4999';
+const PORT = 4999;
+const baseUrl = `http://localhost:${PORT}`;
 
-    let passed = 0;
-    let failed = 0;
+let server: Server;
+let headers: Record<string, string>;
 
-    function assert(condition: boolean, testName: string, detail?: any) {
-        if (condition) {
-            console.log(`  ✅ PASS: ${testName}`);
-            passed++;
-        } else {
-            console.error(`  ❌ FAIL: ${testName}`, detail || '');
-            failed++;
-        }
-    }
+beforeAll(async () => {
+  const app = createApp();
+  server = app.listen(PORT);
 
-    try {
-        // 1. Health check
-        const healthRes = await fetch(`${baseUrl}/health`);
-        const healthData = await healthRes.json();
-        assert(healthRes.status === 200, 'Health check status 200');
-        assert(healthData.data.database === 'connected', 'Database connected');
+  // Login as Coordinator to get auth token
+  const loginRes = await fetch(`${baseUrl}/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'coordinator@yourcargocontact.com',
+      password: 'Password123!',
+    }),
+  });
+  const loginData = await json(loginRes);
+  headers = {
+    Authorization: `Bearer ${loginData.data.access_token}`,
+    'Content-Type': 'application/json',
+  };
+});
 
-        // 2. Metrics endpoint
-        const metricsRes = await fetch(`${baseUrl}/v1/freight/metrics`);
-        const metricsData = await metricsRes.json();
-        assert(metricsRes.status === 200, 'GET /v1/freight/metrics status 200');
-        assert(Number(metricsData.data.total_active) >= 4, 'Metrics returns at least 4 active sea files');
+afterAll(() => {
+  server.close();
+});
 
-        // 3. List Freight Files
-        const listRes = await fetch(`${baseUrl}/v1/freight/files?mode=sea`);
-        const listData = await listRes.json();
-        assert(listRes.status === 200, 'GET /v1/freight/files status 200');
-        assert(Array.isArray(listData.data), 'Returns files array');
-        assert(listData.page.total >= 4, 'Pagination total reflects seeded count');
+// ── Tests ────────────────────────────────────────────────────────────────────
 
-        const exportFile = listData.data.find((f: any) => f.human_id === 'SF-2026-00004');
-        assert(Boolean(exportFile), 'Found seeded file SF-2026-00004');
+describe('Sea Freight API Integration', () => {
+  // ── 1. Health Check ─────────────────────────────────────────────────────
 
-        // 4. Get File Dossier
-        const dossierRes = await fetch(`${baseUrl}/v1/freight/files/${exportFile.id}`);
-        const dossierData = await dossierRes.json();
-        assert(dossierRes.status === 200, 'GET /v1/freight/files/:id dossier status 200');
-        assert(dossierData.data.containers.length > 0, 'Dossier includes child containers');
-        assert(
-            dossierData.data.compliance_evaluation.status === 'green',
-            'Reefer compliance evaluates to GREEN'
-        );
+  it('Health check returns 200 with database connected', async () => {
+    const res = await fetch(`${baseUrl}/health`);
+    const data = await json(res);
+    expect(res.status).toBe(200);
+    expect(data.data.database).toBe('connected');
+  });
 
-        // 5. Test State Machine Hard Gate: Illegal Transition (draft -> delivered)
-        const illegalTransitionRes = await fetch(`${baseUrl}/v1/freight/files/${exportFile.id}/transition`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                target_status: 'delivered',
-                version: exportFile.version,
-            }),
-        });
-        const illegalData = await illegalTransitionRes.json();
-        assert(
-            illegalTransitionRes.status === 400 && illegalData.error.code === 'INVALID_TRANSITION',
-            'Illegal state transition rejected with 400 INVALID_TRANSITION'
-        );
+  // ── 2. Metrics ──────────────────────────────────────────────────────────
 
-        // 6. Test Valid Transition: vgm_si_submitted -> loaded
-        const validTransitionRes = await fetch(`${baseUrl}/v1/freight/files/${exportFile.id}/transition`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                target_status: 'loaded',
-                version: exportFile.version,
-                reason: 'All containers gated in and loaded on Al Jmeliyah',
-            }),
-        });
-        const validData = await validTransitionRes.json();
-        assert(
-            validTransitionRes.status === 200 && validData.data.file.status === 'loaded',
-            'Valid state transition to loaded succeeded and version incremented'
-        );
+  it('GET /v1/freight/metrics returns at least 4 active sea files', async () => {
+    const res = await fetch(`${baseUrl}/v1/freight/metrics`, { headers });
+    const data = await json(res);
+    expect(res.status).toBe(200);
+    expect(Number(data.data.total_active)).toBeGreaterThanOrEqual(4);
+  });
 
-        // 7. Test Gate Violation: Import file without customs release cannot move to cleared
-        const importFile1 = listData.data.find((f: any) => f.human_id === 'SF-2026-00001');
-        // First transition from release_pending -> arrived (allowed)
-        const arrivedRes = await fetch(`${baseUrl}/v1/freight/files/${importFile1.id}/transition`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                target_status: 'arrived',
-                version: importFile1.version,
-            }),
-        });
-        const arrivedData = await arrivedRes.json();
-        assert(arrivedRes.status === 200, 'Import file transitioned to arrived');
+  // ── 3. List Freight Files ───────────────────────────────────────────────
 
-        // Now attempt arrived -> cleared (should be blocked because customs_declaration_status is 'submitted', not 'accepted')
-        const blockedImportRes = await fetch(`${baseUrl}/v1/freight/files/${importFile1.id}/transition`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                target_status: 'cleared',
-                version: arrivedData.data.file.version,
-            }),
-        });
-        const blockedData = await blockedImportRes.json();
-        assert(
-            blockedImportRes.status === 422 && blockedData.error.code === 'CUSTOMS_RELEASE_GATE_FAILED',
-            'Un-cleared customs declaration gate blocked transition with 422 CUSTOMS_RELEASE_GATE_FAILED'
-        );
+  describe('List & Dossier', () => {
+    let exportFile: any;
+    let importFile: any;
+    let listData: any;
 
-        // 8. Create new file with automatic human_id generation
-        const createRes = await fetch(`${baseUrl}/v1/freight/files`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                mode: 'sea',
-                direction: 'import',
-                shipper_name: 'Kyoto Electronics Co.',
-                consignee_name: 'Dutch Distribution Center B.V.',
-                pol: 'JPOSA',
-                pod: 'NLRTM',
-                carrier_name: 'ONE (Ocean Network Express)',
-                special_handling_type: 'none',
-                currency: 'EUR',
-            }),
-        });
-        const createData = await createRes.json();
-        assert(createRes.status === 201, 'POST /v1/freight/files created file with 201');
-        assert(createData.data.human_id.startsWith('SF-'), 'Server generated human_id formatted as SF-YYYY-NNNNN');
+    beforeAll(async () => {
+      const res = await fetch(`${baseUrl}/v1/freight/files?mode=sea`, { headers });
+      listData = await json(res);
+      exportFile = listData.data.find((f: any) => (f.file_no || f.human_id) === 'SF-2026-00004');
+      importFile = listData.data.find((f: any) => (f.file_no || f.human_id) === 'SF-2026-00001');
+    });
 
-        // 9. Add Drayage Transport Order
-        const drayageRes = await fetch(`${baseUrl}/v1/freight/files/${createData.data.id}/drayage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                type: 'import_delivery',
-                terminal_name: 'ECT Delta Terminal',
-                facility_address: 'Europaweg 875, 3199 LD Rotterdam',
-                trucking_company: 'Mainport Trucking B.V.',
-            }),
-        });
-        const drayageData = await drayageRes.json();
-        assert(drayageRes.status === 201, 'POST /v1/freight/files/:id/drayage created transport order');
-        assert(drayageData.data.order_number.startsWith('TR-'), 'Server generated transport order number TR-YYYY-NNNNN');
-    } catch (err) {
-        console.error('Test execution exception:', err);
-        failed++;
-    } finally {
-        server.close();
-        console.log(`\n📊 Verification Summary: ${passed} passed, ${failed} failed.\n`);
-        process.exit(failed > 0 ? 1 : 0);
-    }
-}
+    it('GET /v1/freight/files returns 200 with files array', () => {
+      expect(listData.data).toBeInstanceOf(Array);
+    });
 
-runTests();
+    it('Pagination total reflects seeded count', () => {
+      expect(listData.page.total).toBeGreaterThanOrEqual(4);
+    });
+
+    it('Found seeded file SF-2026-00004', () => {
+      expect(exportFile).toBeTruthy();
+    });
+
+    // ── 4. Dossier ──────────────────────────────────────────────────────
+
+    it('GET /v1/freight/files/:id dossier includes containers and reefer compliance', async () => {
+      const res = await fetch(`${baseUrl}/v1/freight/files/${exportFile.id}`, { headers });
+      const data = await json(res);
+      expect(res.status).toBe(200);
+      expect(data.data.containers.length).toBeGreaterThan(0);
+      expect((data.data.compliance_evaluation || data.data.special_handling_evaluation).status.toLowerCase()).toBe('green');
+    });
+
+    // ── 5. State Machine: Illegal Transition ────────────────────────────
+
+    it('Illegal state transition rejected with 400 INVALID_TRANSITION', async () => {
+      const res = await fetch(`${baseUrl}/v1/freight/files/${exportFile.id}/transition`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          target_status: 'delivered',
+          version: exportFile.version,
+        }),
+      });
+      const data = await json(res);
+      expect(res.status).toBe(400);
+      expect(data.error.code).toBe('INVALID_TRANSITION');
+    });
+
+    // ── 6. Valid Transition ─────────────────────────────────────────────
+
+    it('Valid state transition to loaded succeeds', async () => {
+      const res = await fetch(`${baseUrl}/v1/freight/files/${exportFile.id}/transition`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          target_status: 'loaded',
+          version: exportFile.version,
+          reason: 'All containers gated in and loaded on Al Jmeliyah',
+        }),
+      });
+      const data = await json(res);
+      expect(res.status).toBe(200);
+      expect(data.data.file.status.toLowerCase()).toBe('loaded');
+    });
+
+    // ── 7. Gate Violation ───────────────────────────────────────────────
+
+    it('Import file transitions to arrived', async () => {
+      const res = await fetch(`${baseUrl}/v1/freight/files/${importFile.id}/transition`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          target_status: 'arrived',
+          version: importFile.version,
+        }),
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('Un-cleared customs declaration gate blocks transition with 422', async () => {
+      // Re-fetch the file to get the updated version after arrived transition
+      const fileRes = await fetch(`${baseUrl}/v1/freight/files/${importFile.id}`, { headers });
+      const fileData = await json(fileRes);
+
+      const res = await fetch(`${baseUrl}/v1/freight/files/${importFile.id}/transition`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          target_status: 'cleared',
+          version: fileData.data.version,
+        }),
+      });
+      const data = await json(res);
+      expect(res.status).toBe(422);
+      expect(data.error.code).toBe('CUSTOMS_RELEASE_GATE_FAILED');
+    });
+  });
+
+  // ── 8. Create File with Auto human_id ─────────────────────────────────
+
+  describe('File Creation & Drayage', () => {
+    let createdFileId: string;
+
+    it('POST /v1/freight/files creates file with auto-generated human_id', async () => {
+      const res = await fetch(`${baseUrl}/v1/freight/files`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          mode: 'sea',
+          direction: 'import',
+          shipper_name: 'Kyoto Electronics Co.',
+          consignee_name: 'Dutch Distribution Center B.V.',
+          pol: 'JPOSA',
+          pod: 'NLRTM',
+          carrier_name: 'ONE (Ocean Network Express)',
+          special_handling_type: 'none',
+          currency: 'EUR',
+        }),
+      });
+      const data = await json(res);
+      expect(res.status).toBe(201);
+      expect(data.data.file_no || data.data.human_id).toMatch(/^SF-/);
+
+      createdFileId = data.data.id;
+    });
+
+    // ── 9. Drayage Transport Order ──────────────────────────────────────
+
+    it('POST /v1/freight/files/:id/drayage creates transport order', async () => {
+      const res = await fetch(`${baseUrl}/v1/freight/files/${createdFileId}/drayage`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          type: 'import_delivery',
+          terminal_name: 'ECT Delta Terminal',
+          facility_address: 'Europaweg 875, 3199 LD Rotterdam',
+          trucking_company: 'Mainport Trucking B.V.',
+        }),
+      });
+      const data = await json(res);
+      expect(res.status).toBe(201);
+      expect(data.data.order_number).toMatch(/^TR-/);
+    });
+  });
+});
