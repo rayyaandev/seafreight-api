@@ -6,6 +6,9 @@ import {
     ListFreightFilesQuerySchema,
     CreateFreightFileSchema,
     UpdateFreightFileSchema,
+    TransitionActionSchema,
+    RecordAtaSchema,
+    ActionVersionSchema,
     SpecialHandlingOverrideSchema,
     CreateContainerSchema,
     CreateFreightLineSchema,
@@ -30,6 +33,24 @@ freightRouter.patch('/files/:id', validateBody(UpdateFreightFileSchema), require
 freightRouter.get('/files/:id/gates', requirePermission('freight.file.read'), FreightController.evaluateGates);
 freightRouter.post('/files/:id/special-handling', validateBody(SpecialHandlingOverrideSchema), requirePermission('freight.file.special_handling'), FreightController.updateSpecialHandling);
 
+// Generic Transition Route
+freightRouter.post('/files/:id/transition', validateBody(TransitionActionSchema), requirePermission('freight.file.update'), FreightController.transitionFile);
+
+// Sea Import Explicit Action Endpoints
+freightRouter.post('/files/:id/release-bl', validateBody(ActionVersionSchema), requirePermission('freight.file.release_bl'), FreightController.releaseBl);
+freightRouter.post('/files/:id/record-ata', validateBody(RecordAtaSchema), requirePermission('freight.file.record_ata'), FreightController.recordAta);
+freightRouter.post('/files/:id/clear', validateBody(ActionVersionSchema), requirePermission('freight.file.clear'), FreightController.clearCustoms);
+freightRouter.post('/files/:id/deliver', validateBody(ActionVersionSchema), requirePermission('freight.file.deliver'), FreightController.deliverFile);
+
+// Sea Export Explicit Action Endpoints
+freightRouter.post('/files/:id/book', validateBody(ActionVersionSchema), requirePermission('freight.file.book'), FreightController.bookExport);
+freightRouter.post('/files/:id/submit-vgm', validateBody(ActionVersionSchema), requirePermission('freight.file.submit_vgm'), FreightController.submitVgm);
+freightRouter.post('/files/:id/load', validateBody(ActionVersionSchema), requirePermission('freight.file.load'), FreightController.loadExport);
+freightRouter.post('/files/:id/issue-bl', validateBody(ActionVersionSchema), requirePermission('freight.file.issue_bl'), FreightController.issueBl);
+
+// Common Close Endpoint
+freightRouter.post('/files/:id/close', validateBody(ActionVersionSchema), requirePermission('freight.file.close'), FreightController.closeFile);
+
 // Child Collections
 // 1. Containers
 freightRouter.post('/files/:id/containers', validateBody(CreateContainerSchema), requirePermission('freight.file.update'), FreightController.addContainer);
@@ -51,6 +72,7 @@ freightRouter.post('/files/:id/notes', validateBody(CreateFileNoteSchema), requi
 
 // 6. Drayage Orders
 freightRouter.post('/files/:id/drayage-orders', validateBody(CreateDrayageOrderSchema), requirePermission('freight.file.update'), FreightController.addDrayageOrder);
+freightRouter.post('/files/:id/drayage', validateBody(CreateDrayageOrderSchema), requirePermission('freight.file.update'), FreightController.addDrayageOrder);
 
 // 7. Milestones
 freightRouter.post('/files/:id/milestones', requirePermission('freight.file.update'), FreightController.addMilestone);

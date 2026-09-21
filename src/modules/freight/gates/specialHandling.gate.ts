@@ -20,20 +20,20 @@ export function evaluateSpecialHandlingDetails(
     let status: SpecialStatus = SpecialStatus.GREEN;
 
     const imdgContainers = containers.filter((c) => Boolean(c.imdg_class) || Boolean(c.un_number));
-    const reeferContainers = containers.filter((c) => c.type === '20RF' || c.type === '40RF' || c.temperature_setpoint_c !== null);
-    const oogContainers = containers.filter((c) => c.is_oog === true);
+    const reeferContainers = containers.filter((c) => c.type === '20RF' || c.type === '40RF' || (c.temperature_setpoint_c != null && c.temperature_setpoint_c !== ''));
+    const oogContainers = containers.filter((c) => Boolean(c.is_oog));
 
     let imdgCompliant = 0;
     for (const c of imdgContainers) {
         const cIssues: string[] = [];
         if (!c.imdg_class) cIssues.push('missing IMDG class');
         if (!c.un_number) cIssues.push('missing UN number');
-        if (!c.carrier_dg_accepted) cIssues.push('carrier DG approval pending');
-        if (!c.dg_declaration_attached) cIssues.push('DG declaration missing');
+        if (!Boolean(c.carrier_dg_accepted)) cIssues.push('carrier DG approval pending');
+        if (!Boolean(c.dg_declaration_attached)) cIssues.push('DG declaration missing');
 
         if (cIssues.length > 0) {
             issues.push(`Container ${c.container_number}: ${cIssues.join(', ')}`);
-            if (!c.carrier_dg_accepted || !c.imdg_class) {
+            if (!Boolean(c.carrier_dg_accepted) || !c.imdg_class) {
                 status = SpecialStatus.RED;
             } else if (status !== SpecialStatus.RED) {
                 status = SpecialStatus.ORANGE;
@@ -46,10 +46,10 @@ export function evaluateSpecialHandlingDetails(
     let reeferCompliant = 0;
     for (const c of reeferContainers) {
         const cIssues: string[] = [];
-        if (c.temperature_setpoint_c === null || c.temperature_setpoint_c === undefined) {
+        if (c.temperature_setpoint_c === null || c.temperature_setpoint_c === undefined || c.temperature_setpoint_c === '') {
             cIssues.push('temperature setpoint not defined');
         }
-        if (!c.pre_trip_inspection_passed) {
+        if (!Boolean(c.pre_trip_inspection_passed)) {
             cIssues.push('PTI (Pre-Trip Inspection) not passed');
         }
 

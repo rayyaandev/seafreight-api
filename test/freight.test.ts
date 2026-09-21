@@ -376,4 +376,230 @@ describe('Freight Dossier & Child Entities', () => {
       expect(data.data.special_status).toBe('ORANGE');
     });
   });
+
+  // ── 9. Explicit Lifecycle Action Endpoints ──────────────────────────────
+
+  describe('9. Explicit Action Endpoints (Import & Export)', () => {
+    let testImportId: string;
+    let testExportId: string;
+
+    it('Import: release-bl transitions Draft -> ReleasePending', async () => {
+      // Create fresh import file
+      const createRes = await fetch(`${baseUrl}/v1/freight/files`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          mode: 'sea',
+          direction: 'import',
+          vessel: 'Maersk Mc-Kinney Moller',
+          voyage: '2602W',
+        }),
+      });
+      const createData = await json(createRes);
+      testImportId = createData.data.id;
+
+      // Add released MBL to pass BL_RELEASE gate
+      await fetch(`${baseUrl}/v1/freight/files/${testImportId}/bills-of-lading`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          type: 'MBL',
+          bl_number: 'MSKU8822001',
+          telex_release: true,
+          released_at: new Date().toISOString(),
+        }),
+      });
+
+      // Refetch file to get version
+      const fRes = await fetch(`${baseUrl}/v1/freight/files/${testImportId}`, { headers });
+      const fData = await json(fRes);
+
+      const res = await fetch(`${baseUrl}/v1/freight/files/${testImportId}/release-bl`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          version: fData.data.version,
+          reason: 'B/L released by carrier',
+        }),
+      });
+      const data = await json(res);
+      expect(res.status).toBe(200);
+      expect(data.data.file.status).toBe('ReleasePending');
+    });
+
+    it('Import: record-ata transitions ReleasePending -> Arrived and calculates free time', async () => {
+      const fRes = await fetch(`${baseUrl}/v1/freight/files/${testImportId}`, { headers });
+      const fData = await json(fRes);
+
+      const res = await fetch(`${baseUrl}/v1/freight/files/${testImportId}/record-ata`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          version: fData.data.version,
+          ata: new Date().toISOString(),
+          reason: 'Vessel berthed at ECT Delta',
+        }),
+      });
+      const data = await json(res);
+      expect(res.status).toBe(200);
+      expect(data.data.file.status).toBe('Arrived');
+      expect(data.data.file.ata).toBeTruthy();
+    });
+
+    it('Import: deliver transitions Cleared -> Delivered', async () => {
+      // Simulate customs and container release via PATCH update
+      const fRes = await fetch(`${baseUrl}/v1/freight/files/${testImportId}`, { headers });
+      const fData = await json(fRes);
+
+      await fetch(`${baseUrl}/v1/freight/files/${testImportId}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          version: fData.data.version,
+          declaration_status: 'accepted',
+          container_release_received_at: new Date().toISOString(),
+        }),
+      });
+
+      // Refetch and Clear
+      const fRes2 = await fetch(`${baseUrl}/v1/freight/files/${testImportId}`, { headers });
+      const fData2 = await json(fRes2);
+
+      const clearRes = await fetch(`${baseUrl}/v1/freight/files/${testImportId}/clear`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          version: fData2.data.version,
+          reason: 'Customs cleared & terminal release received',
+        }),
+      });
+      const clearData = await json(clearRes);
+      expect(clearRes.status).toBe(200);
+      expect(clearData.data.file.status).toBe('Cleared');
+
+      // Deliver
+      const deliverRes = await fetch(`${baseUrl}/v1/freight/files/${testImportId}/deliver`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          version: clearData.data.file.version,
+          reason: 'Consignee signed POD',
+        }),
+      });
+      const deliverData = await json(deliverRes);
+      expect(deliverRes.status).toBe(200);
+      expect(deliverData.data.file.status).toBe('Delivered');
+
+      // Close
+      const closeRes = await fetch(`${baseUrl}/v1/freight/files/${testImportId}/close`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          version: deliverData.data.file.version,
+          reason: 'Job completed & handed to invoicing',
+        }),
+      });
+      const closeData = await json(closeRes);
+      expect(closeRes.status).toBe(200);
+      expect(closeData.data.file.status).toBe('Closed');
+    });
+
+    it('Export: book -> submit-vgm -> load -> issue-bl -> close lifecycle', async () => {
+      // 1. Create Export file
+      const createRes = await fetch(`${baseUrl}/v1/freight/files`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          mode: 'sea',
+          direction: 'export',
+          vessel: 'CMA CGM Jacques Saade',
+          voyage: '2603E',
+        }),
+      });
+      const createData = await json(createRes);
+      testExportId = createData.data.id;
+
+      // 2. Book
+      const bookRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}/book`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          version: createData.data.version,
+          reason: 'Space confirmed on vessel',
+        }),
+      });
+      const bookData = await json(bookRes);
+      expect(bookRes.status).toBe(200);
+      expect(bookData.data.file.status).toBe('Booked');
+
+      // 3. Submit VGM
+      const vgmRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}/submit-vgm`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          version: bookData.data.file.version,
+          reason: 'Shipper confirmed certified weights',
+        }),
+      });
+      const vgmData = await json(vgmRes);
+      expect(vgmRes.status).toBe(200);
+      expect(vgmData.data.file.status).toBe('VgmSiSubmitted');
+
+      // 4. Add container with VGM to pass load gate
+      await fetch(`${baseUrl}/v1/freight/files/${testExportId}/containers`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          container_number: 'CMAU1234567',
+          type: '40HC',
+          tare_weight_kg: 3800,
+          gross_weight_kg: 24000,
+          vgm_kg: 24000,
+          vgm_submitted_at: new Date().toISOString(),
+        }),
+      });
+
+      const fRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}`, { headers });
+      const fData = await json(fRes);
+
+      // 5. Load
+      const loadRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}/load`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          version: fData.data.version,
+          reason: 'Loaded on board',
+        }),
+      });
+      const loadData = await json(loadRes);
+      expect(loadRes.status).toBe(200);
+      expect(loadData.data.file.status).toBe('Loaded');
+
+      // 6. Issue BL
+      const issueRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}/issue-bl`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          version: loadData.data.file.version,
+          reason: 'Original B/L dispatched',
+        }),
+      });
+      const issueData = await json(issueRes);
+      expect(issueRes.status).toBe(200);
+      expect(issueData.data.file.status).toBe('BlIssued');
+
+      // 7. Close
+      const closeRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}/close`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          version: issueData.data.file.version,
+          reason: 'Export complete',
+        }),
+      });
+      const closeData = await json(closeRes);
+      expect(closeRes.status).toBe(200);
+      expect(closeData.data.file.status).toBe('Closed');
+    });
+  });
 });

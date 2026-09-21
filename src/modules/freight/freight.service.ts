@@ -1,8 +1,28 @@
 import { FreightRepository } from './freight.repository.js';
 import { evaluateAllGates, evaluateSpecialHandlingDetails } from './gates/index.js';
+import { SeaImportStateMachine } from './state-machine/import-state-machine.js';
+import { SeaExportStateMachine } from './state-machine/export-state-machine.js';
 import { AuditService } from '../audit/audit.service.js';
 import { AppError } from '../../utils/response.js';
-import { SpecialStatus, SpecialType } from '../../common/enums.js';
+import { SpecialStatus, SpecialType, GateCode, SeaImportStatus, SeaExportStatus } from '../../common/enums.js';
+
+function normalizeStatus(status: string): string {
+    const s = status.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const map: Record<string, string> = {
+        draft: 'Draft',
+        releasepending: 'ReleasePending',
+        intransit: 'InTransit',
+        arrived: 'Arrived',
+        cleared: 'Cleared',
+        delivered: 'Delivered',
+        closed: 'Closed',
+        booked: 'Booked',
+        vgmsisubmitted: 'VgmSiSubmitted',
+        loaded: 'Loaded',
+        blissued: 'BlIssued',
+    };
+    return map[s] || status;
+}
 import type {
     FreightFileEntity,
     FreightContainerEntity,
@@ -83,6 +103,7 @@ export class FreightService {
             charges,
             gates_summary: gateEvaluation,
             special_handling_evaluation: specialHandlingEvaluation,
+            compliance_evaluation: specialHandlingEvaluation,
         };
     }
 
@@ -651,6 +672,287 @@ export class FreightService {
         });
 
         return { deleted: true };
+    }
+
+    // ------------------------------------------------------------------------
+    // Lifecycle Transitions (Import & Export)
+    // ------------------------------------------------------------------------
+    public static async transitionFile(
+        id: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        targetStatus: string,
+        reason?: string
+    ) {
+        const file = await FreightRepository.findById(id, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${id}' not found`);
+        }
+
+        if (file.version !== version) {
+            throw new AppError(
+                409,
+                'CONFLICT',
+                `Conflict: file version is ${file.version}, but provided version was ${version}. Please refresh and try again.`
+            );
+        }
+
+        const canonicalTarget = normalizeStatus(targetStatus);
+
+        let transition: {
+            fromStatus: string;
+            toStatus: string;
+            actionTaken: string;
+            eventsToPublish: string[];
+            demurrageWarning?: boolean;
+        };
+
+        if (file.direction === 'import') {
+            // 1. Validate structural transition
+            transition = SeaImportStateMachine.validateTransition(file.status, canonicalTarget);
+
+            // 2. Enforce required gates
+            const requiredGates = SeaImportStateMachine.requiredGatesForTransition(canonicalTarget);
+            if (requiredGates.length > 0) {
+                const [containers, lines, billsOfLading] = await Promise.all([
+                    FreightRepository.getContainers(id),
+                    FreightRepository.getLines(id),
+                    FreightRepository.getBillsOfLading(id),
+                ]);
+
+                const gateContext = { containers, lines, billsOfLading };
+                const gateEvaluation = evaluateAllGates(file as any, gateContext);
+
+                for (const requiredGateCode of requiredGates) {
+                    const gateResult = gateEvaluation.gates.find((g) => g.gate === requiredGateCode);
+                    if (gateResult && !gateResult.pass) {
+                        throw new AppError(
+                            422,
+                            `${requiredGateCode}_GATE_FAILED`,
+                            `${requiredGateCode} Gate Failed: ${gateResult.reason}`
+                        );
+                    }
+                }
+            }
+
+            // 3. Check demurrage warning on arrival
+            if (canonicalTarget === SeaImportStatus.ARRIVED && file.ata) {
+                const freeTimeDays = file.free_time_days || 5;
+                const ataDate = new Date(file.ata).getTime();
+                const freeTimeExpiry = ataDate + freeTimeDays * 24 * 3600 * 1000;
+                const hoursRemaining = (freeTimeExpiry - Date.now()) / (1000 * 60 * 60);
+                if (hoursRemaining < 48) {
+                    transition.demurrageWarning = true;
+                }
+            }
+        } else if (file.direction === 'export') {
+            const containers = await FreightRepository.getContainers(id);
+            transition = SeaExportStateMachine.validateTransition(file, canonicalTarget, containers);
+        } else {
+            throw new AppError(400, 'INVALID_DIRECTION', `Unsupported direction '${file.direction}' for lifecycle transition`);
+        }
+
+        // Apply status change with optimistic lock
+        const updated = await FreightRepository.update(id, workspaceId, version, {
+            status: canonicalTarget,
+        });
+
+        if (!updated) {
+            throw new AppError(409, 'CONFLICT', 'Failed to update file due to a concurrent modification.');
+        }
+
+        // Write audit trail
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'freight_file',
+            entityId: id,
+            action: 'transition',
+            fromState: transition.fromStatus,
+            toState: transition.toStatus,
+            payload: {
+                action_taken: transition.actionTaken,
+                reason,
+                events: transition.eventsToPublish,
+                demurrage_warning: transition.demurrageWarning,
+            },
+        });
+
+        return {
+            file: updated,
+            transition,
+        };
+    }
+
+    public static async transitionImportFile(
+        id: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        targetStatus: string,
+        reason?: string
+    ) {
+        return this.transitionFile(id, workspaceId, actorId, version, targetStatus, reason);
+    }
+
+    public static async releaseBl(
+        id: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        reason?: string
+    ) {
+        return this.transitionFile(id, workspaceId, actorId, version, SeaImportStatus.RELEASE_PENDING, reason);
+    }
+
+    public static async clearCustoms(
+        id: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        reason?: string
+    ) {
+        return this.transitionFile(id, workspaceId, actorId, version, SeaImportStatus.CLEARED, reason);
+    }
+
+    public static async deliverFile(
+        id: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        reason?: string
+    ) {
+        return this.transitionFile(id, workspaceId, actorId, version, SeaImportStatus.DELIVERED, reason);
+    }
+
+    public static async bookExport(
+        id: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        reason?: string
+    ) {
+        return this.transitionFile(id, workspaceId, actorId, version, SeaExportStatus.BOOKED, reason);
+    }
+
+    public static async submitVgm(
+        id: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        reason?: string
+    ) {
+        return this.transitionFile(id, workspaceId, actorId, version, SeaExportStatus.VGM_SI_SUBMITTED, reason);
+    }
+
+    public static async loadExport(
+        id: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        reason?: string
+    ) {
+        return this.transitionFile(id, workspaceId, actorId, version, SeaExportStatus.LOADED, reason);
+    }
+
+    public static async issueBl(
+        id: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        reason?: string
+    ) {
+        return this.transitionFile(id, workspaceId, actorId, version, SeaExportStatus.BL_ISSUED, reason);
+    }
+
+    public static async closeFile(
+        id: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        reason?: string
+    ) {
+        return this.transitionFile(id, workspaceId, actorId, version, 'Closed', reason);
+    }
+
+    public static async recordAta(
+        id: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        ata?: string,
+        reason?: string
+    ) {
+        const file = await FreightRepository.findById(id, workspaceId);
+        if (!file) {
+            throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${id}' not found`);
+        }
+
+        if (file.direction !== 'import') {
+            throw new AppError(400, 'INVALID_DIRECTION', 'Record ATA is for sea import files only');
+        }
+
+        if (file.version !== version) {
+            throw new AppError(
+                409,
+                'CONFLICT',
+                `Conflict: file version is ${file.version}, but provided version was ${version}.`
+            );
+        }
+
+        const ataValue = ata || new Date().toISOString();
+
+        let transitionResult: any = null;
+        const targetStatus = SeaImportStatus.ARRIVED;
+        if (file.status !== SeaImportStatus.ARRIVED && file.status !== SeaImportStatus.CLEARED && file.status !== SeaImportStatus.DELIVERED && file.status !== SeaImportStatus.CLOSED) {
+            transitionResult = SeaImportStateMachine.validateTransition(file.status, targetStatus);
+        }
+
+        const freeTimeDays = file.free_time_days || 5;
+        const ataDate = new Date(ataValue).getTime();
+        const freeTimeExpiry = ataDate + freeTimeDays * 24 * 3600 * 1000;
+        const hoursRemaining = (freeTimeExpiry - Date.now()) / (1000 * 60 * 60);
+        const demurrageWarning = hoursRemaining < 48;
+
+        const updatePayload: Partial<FreightFileEntity> = {
+            ata: ataValue,
+        };
+        if (transitionResult) {
+            updatePayload.status = targetStatus;
+        }
+
+        const updated = await FreightRepository.update(id, workspaceId, version, updatePayload);
+        if (!updated) {
+            throw new AppError(409, 'CONFLICT', 'Failed to update file due to a concurrent modification.');
+        }
+
+        await AuditService.log({
+            workspaceId,
+            actorId,
+            entityType: 'freight_file',
+            entityId: id,
+            action: 'record_ata',
+            fromState: file.status,
+            toState: updated.status,
+            payload: {
+                ata: ataValue,
+                demurrage_warning: demurrageWarning,
+                events: transitionResult ? transitionResult.eventsToPublish : [],
+                reason,
+            },
+        });
+
+        return {
+            file: updated,
+            transition: transitionResult || {
+                fromStatus: file.status,
+                toStatus: updated.status,
+                actionTaken: 'Recorded vessel arrival ATA',
+                eventsToPublish: [],
+                demurrageWarning,
+            },
+        };
     }
 
     // ------------------------------------------------------------------------

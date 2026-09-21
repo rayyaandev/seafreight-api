@@ -314,4 +314,179 @@ export class FreightController {
             next(err);
         }
     }
+
+    // ------------------------------------------------------------------------
+    // Lifecycle Transitions (Specific Action Endpoints & Generic Transition)
+    // ------------------------------------------------------------------------
+    public static async transitionFile(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, target_status, reason } = req.body;
+            const result = await FreightService.transitionFile(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                Number(version),
+                target_status,
+                reason
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async releaseBl(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, reason } = req.body;
+            const result = await FreightService.releaseBl(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                Number(version),
+                reason
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async recordAta(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, ata, reason } = req.body;
+            const result = await FreightService.recordAta(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                Number(version),
+                ata,
+                reason
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async clearCustoms(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, reason } = req.body;
+            const result = await FreightService.clearCustoms(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                Number(version),
+                reason
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async deliverFile(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, reason } = req.body;
+            const result = await FreightService.deliverFile(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                Number(version),
+                reason
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async bookExport(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, reason } = req.body;
+            const result = await FreightService.bookExport(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                Number(version),
+                reason
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async submitVgm(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, reason } = req.body;
+            const result = await FreightService.submitVgm(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                Number(version),
+                reason
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async loadExport(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, reason } = req.body;
+            const result = await FreightService.loadExport(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                Number(version),
+                reason
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async issueBl(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, reason } = req.body;
+            const result = await FreightService.issueBl(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                Number(version),
+                reason
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    public static async closeFile(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, reason } = req.body;
+            const result = await FreightService.closeFile(
+                req.params.id as string,
+                workspaceId,
+                actorId,
+                Number(version),
+                reason
+            );
+            sendSuccess(res, result);
+        } catch (err) {
+            next(err);
+        }
+    }
 }

@@ -13,6 +13,23 @@ import type {
     ChargeEntity,
 } from '../../common/types.js';
 
+function sanitizeDates<T extends Record<string, any>>(obj: T): T {
+    const result: any = { ...obj };
+    const dateFields = [
+        'etd', 'eta', 'ata', 'atd',
+        'doc_cutoff', 'vgm_cutoff', 'gate_cutoff',
+        'vgm_submitted_at', 'gate_in_at', 'gate_out_at',
+        'container_release_received_at', 'issue_date', 'released_at',
+        'scheduled_at', 'occurred_at', 'timestamp', 'delivered_at', 'resolved_at'
+    ];
+    for (const key of dateFields) {
+        if (result[key] !== undefined && result[key] !== null && typeof result[key] === 'string') {
+            result[key] = new Date(result[key]);
+        }
+    }
+    return result;
+}
+
 export class FreightRepository {
     public static async generateHumanId(mode: 'sea' | 'air', year = new Date().getFullYear()): Promise<string> {
         const prefix = mode === 'sea' ? 'SF' : 'AF';
@@ -71,22 +88,26 @@ export class FreightRepository {
         if (filters.eta_to) query.where('eta', '<=', filters.eta_to);
 
         if (filters.q) {
-            query.andWhere((builder) => {
+            query.where((builder) => {
                 builder
-                    .whereILike('file_no', `%${filters.q}%`)
-                    .orWhereILike('vessel', `%${filters.q}%`)
-                    .orWhereILike('voyage', `%${filters.q}%`)
-                    .orWhereILike('declaration_id', `%${filters.q}%`)
-                    .orWhereILike('mrn', `%${filters.q}%`);
+                    .where('file_no', 'like', `%${filters.q}%`)
+                    .orWhere('vessel', 'like', `%${filters.q}%`)
+                    .orWhere('voyage', 'like', `%${filters.q}%`)
+                    .orWhere('mrn', 'like', `%${filters.q}%`);
             });
         }
 
-        const countQuery = query.clone().count<{ total: number }>('id as total').first();
-        const limit = Number(filters.limit) || 20;
-        const offset = Number(filters.offset) || 0;
-        const rowsQuery = query.clone().orderBy('created_at', 'desc').limit(limit).offset(offset);
+        const countQuery = query.clone().clearSelect().clearOrder().count<{ total: number }>('id as total').first();
+        const countRes = await countQuery;
 
-        const [countRes, rows] = await Promise.all([countQuery, rowsQuery]);
+        const limit = filters.limit || 50;
+        const offset = filters.offset || 0;
+
+        const rows = await query
+            .orderBy('created_at', 'desc')
+            .limit(limit)
+            .offset(offset);
+
         return {
             data: rows,
             total: countRes ? Number(countRes.total) : rows.length,
@@ -95,8 +116,9 @@ export class FreightRepository {
 
     public static async create(fileData: Partial<FreightFileEntity>): Promise<FreightFileEntity> {
         const id = fileData.id || randomUUID();
+        const payload = sanitizeDates(fileData);
         await db('freight_file').insert({
-            ...fileData,
+            ...payload,
             id,
             version: 1,
             created_at: db.fn.now(),
@@ -112,10 +134,11 @@ export class FreightRepository {
         currentVersion: number,
         updates: Partial<FreightFileEntity>
     ): Promise<FreightFileEntity | null> {
+        const payload = sanitizeDates(updates);
         const updatedCount = await db('freight_file')
             .where({ id, workspace_id: workspaceId, version: currentVersion })
             .update({
-                ...updates,
+                ...payload,
                 version: currentVersion + 1,
                 updated_at: db.fn.now(),
             });
@@ -148,8 +171,9 @@ export class FreightRepository {
 
     public static async createContainer(data: Partial<FreightContainerEntity>): Promise<FreightContainerEntity> {
         const id = data.id || randomUUID();
+        const payload = sanitizeDates(data);
         await db('freight_container').insert({
-            ...data,
+            ...payload,
             id,
             version: 1,
             created_at: db.fn.now(),
@@ -176,8 +200,9 @@ export class FreightRepository {
 
     public static async createLine(data: Partial<FreightLineEntity>): Promise<FreightLineEntity> {
         const id = data.id || randomUUID();
+        const payload = sanitizeDates(data);
         await db('freight_line').insert({
-            ...data,
+            ...payload,
             id,
             version: 1,
             created_at: db.fn.now(),
@@ -204,8 +229,9 @@ export class FreightRepository {
 
     public static async createBillOfLading(data: Partial<BillOfLadingEntity>): Promise<BillOfLadingEntity> {
         const id = data.id || randomUUID();
+        const payload = sanitizeDates(data);
         await db('bill_of_lading').insert({
-            ...data,
+            ...payload,
             id,
             version: 1,
             created_at: db.fn.now(),
@@ -225,8 +251,9 @@ export class FreightRepository {
 
     public static async createDocument(data: Partial<FileDocumentEntity>): Promise<FileDocumentEntity> {
         const id = data.id || randomUUID();
+        const payload = sanitizeDates(data);
         await db('file_document').insert({
-            ...data,
+            ...payload,
             id,
             version: 1,
             created_at: db.fn.now(),
@@ -253,8 +280,9 @@ export class FreightRepository {
 
     public static async createNote(data: Partial<FileNoteEntity>): Promise<FileNoteEntity> {
         const id = data.id || randomUUID();
+        const payload = sanitizeDates(data);
         await db('file_note').insert({
-            ...data,
+            ...payload,
             id,
             version: 1,
             created_at: db.fn.now(),
@@ -274,9 +302,13 @@ export class FreightRepository {
 
     public static async createDrayageOrder(data: Partial<DrayageOrderEntity>): Promise<DrayageOrderEntity> {
         const id = data.id || randomUUID();
+        const payload = sanitizeDates(data);
+        const orderNumber = data.order_number || `TR-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
+
         await db('drayage_order').insert({
-            ...data,
+            ...payload,
             id,
+            order_number: orderNumber,
             version: 1,
             created_at: db.fn.now(),
             updated_at: db.fn.now(),
@@ -295,10 +327,12 @@ export class FreightRepository {
 
     public static async createMilestone(data: Partial<MilestoneEntity>): Promise<MilestoneEntity> {
         const id = data.id || randomUUID();
+        const payload = sanitizeDates(data);
         await db('milestone').insert({
-            ...data,
+            ...payload,
             id,
             version: 1,
+            timestamp: payload.timestamp ? payload.timestamp : db.fn.now(),
             created_at: db.fn.now(),
             updated_at: db.fn.now(),
         });
@@ -316,8 +350,9 @@ export class FreightRepository {
 
     public static async createException(data: Partial<ExceptionCaseEntity>): Promise<ExceptionCaseEntity> {
         const id = data.id || randomUUID();
+        const payload = sanitizeDates(data);
         await db('exception_case').insert({
-            ...data,
+            ...payload,
             id,
             version: 1,
             created_at: db.fn.now(),
@@ -337,8 +372,9 @@ export class FreightRepository {
 
     public static async createCharge(data: Partial<ChargeEntity>): Promise<ChargeEntity> {
         const id = data.id || randomUUID();
+        const payload = sanitizeDates(data);
         await db('charge').insert({
-            ...data,
+            ...payload,
             id,
             version: 1,
             created_at: db.fn.now(),

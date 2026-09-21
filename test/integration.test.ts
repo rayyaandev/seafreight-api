@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createApp } from '../src/app.js';
+import { seedDatabase } from '../src/db/seeds/01_sea_freight_seed.js';
 import type { Server } from 'http';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -12,6 +13,7 @@ let server: Server;
 let headers: Record<string, string>;
 
 beforeAll(async () => {
+  await seedDatabase();
   const app = createApp();
   server = app.listen(PORT);
 
@@ -66,8 +68,8 @@ describe('Sea Freight API Integration', () => {
     beforeAll(async () => {
       const res = await fetch(`${baseUrl}/v1/freight/files?mode=sea`, { headers });
       listData = await json(res);
-      exportFile = listData.data.find((f: any) => (f.file_no || f.human_id) === 'SF-2026-00004');
-      importFile = listData.data.find((f: any) => (f.file_no || f.human_id) === 'SF-2026-00001');
+      exportFile = listData.data.find((f: any) => f.file_no === 'SF-2026-00004');
+      importFile = listData.data.find((f: any) => f.file_no === 'SF-2026-00001');
     });
 
     it('GET /v1/freight/files returns 200 with files array', () => {
@@ -89,7 +91,7 @@ describe('Sea Freight API Integration', () => {
       const data = await json(res);
       expect(res.status).toBe(200);
       expect(data.data.containers.length).toBeGreaterThan(0);
-      expect((data.data.compliance_evaluation || data.data.special_handling_evaluation).status.toLowerCase()).toBe('green');
+      expect(data.data.special_handling_evaluation.status.toLowerCase()).toBe('green');
     });
 
     // ── 5. State Machine: Illegal Transition ────────────────────────────

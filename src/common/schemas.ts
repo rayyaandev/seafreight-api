@@ -79,6 +79,8 @@ export const CreateFreightFileSchema = z.object({
         CustomsDeclarationStatus.UNDER_CONTROL,
     ]).default(CustomsDeclarationStatus.NONE),
     mrn: z.string().max(64).nullish(),
+    container_release_received_at: z.iso.datetime().nullish(),
+    atd: z.iso.datetime().nullish(),
     lc_flag: z.boolean().default(false),
     total_cost: z.number().nullish(),
     currency: z.string().max(3).default('EUR'),
@@ -89,14 +91,21 @@ export const UpdateFreightFileSchema = CreateFreightFileSchema.partial().extend(
     version: z.number().int().positive({ message: 'Version is required for optimistic concurrency control' }),
 });
 
-export const TransitionActionSchema = z.object({
+export const ActionVersionSchema = z.object({
     version: z.number().int().positive({ message: 'Version is required for optimistic concurrency control' }),
     reason: z.string().optional(),
 });
 
+export const TransitionActionSchema = z.object({
+    version: z.number().int().positive({ message: 'Version is required for optimistic concurrency control' }),
+    target_status: z.string().min(1, { message: 'target_status is required' }),
+    reason: z.string().optional(),
+});
+
 export const RecordAtaSchema = z.object({
-    version: z.number().int().positive(),
-    ata: z.iso.datetime().optional(),
+    version: z.number().int().positive({ message: 'Version is required for optimistic concurrency control' }),
+    ata: z.string().optional(),
+    reason: z.string().optional(),
 });
 
 export const SpecialHandlingOverrideSchema = z.object({

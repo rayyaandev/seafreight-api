@@ -14,7 +14,7 @@ export function blReleaseGate(_file: FreightFileEntity, context?: GateContext): 
         };
     }
 
-    const releasedBl = bills.find((b) => b.telex_release === true || b.original_received === true || Boolean(b.released_at));
+    const releasedBl = bills.find((b) => Boolean(b.telex_release) || Boolean(b.original_received) || Boolean(b.released_at));
 
     if (!releasedBl) {
         return {

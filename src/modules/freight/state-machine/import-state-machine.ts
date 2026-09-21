@@ -1,36 +1,40 @@
-import type {
-    FreightFileEntity,
-    FreightContainerEntity,
-    SeaImportStatus,
-} from './types.js';
+import { SeaImportStatus } from '../../../common/enums.js';
 import { AppError } from '../../../utils/response.js';
 
-export interface TransitionResult {
+export interface ImportTransitionResult {
     fromStatus: string;
-    toStatus: SeaImportStatus;
+    toStatus: string;
     actionTaken: string;
     eventsToPublish: string[];
     demurrageWarning?: boolean;
 }
 
+/**
+ * Sea Import lifecycle state machine.
+ *
+ * Statuses match the SeaImportStatus enum (PascalCase) which is what the DB stores.
+ * Gate enforcement is handled by the service layer using the gate evaluation engine
+ * before calling validateTransition.
+ */
 export class SeaImportStateMachine {
-    public static readonly ALLOWED_TRANSITIONS: Record<SeaImportStatus, SeaImportStatus[]> = {
-        draft: ['release_pending', 'in_transit'],
-        release_pending: ['in_transit', 'arrived'],
-        in_transit: ['arrived'],
-        arrived: ['cleared'],
-        cleared: ['delivered'],
-        delivered: ['closed'],
-        closed: [],
+    public static readonly ALLOWED_TRANSITIONS: Record<string, string[]> = {
+        [SeaImportStatus.DRAFT]: [SeaImportStatus.RELEASE_PENDING, SeaImportStatus.IN_TRANSIT],
+        [SeaImportStatus.RELEASE_PENDING]: [SeaImportStatus.IN_TRANSIT, SeaImportStatus.ARRIVED],
+        [SeaImportStatus.IN_TRANSIT]: [SeaImportStatus.ARRIVED],
+        [SeaImportStatus.ARRIVED]: [SeaImportStatus.CLEARED],
+        [SeaImportStatus.CLEARED]: [SeaImportStatus.DELIVERED],
+        [SeaImportStatus.DELIVERED]: [SeaImportStatus.CLOSED],
+        [SeaImportStatus.CLOSED]: [],
     };
 
+    /**
+     * Validates whether a status transition is structurally allowed.
+     * Does NOT enforce gates — the caller must run gate evaluation separately.
+     */
     public static validateTransition(
-        file: FreightFileEntity,
-        targetStatus: SeaImportStatus,
-        containers: FreightContainerEntity[]
-    ): TransitionResult {
-        const currentStatus = file.status as SeaImportStatus;
-
+        currentStatus: string,
+        targetStatus: string
+    ): ImportTransitionResult {
         if (currentStatus === targetStatus) {
             throw new AppError(400, 'NOOP_TRANSITION', `File is already in status '${targetStatus}'`);
         }
@@ -48,64 +52,30 @@ export class SeaImportStateMachine {
         let actionTaken = `Transitioned from ${currentStatus} to ${targetStatus}`;
         let demurrageWarning = false;
 
-        // Gate 1: B/L Release Gate (Checking when moving to release_pending or issuing delivery order)
-        if (targetStatus === 'release_pending' || targetStatus === 'cleared') {
-            const blPassed = Boolean(file.bl_release_gate_passed);
-            if (!blPassed) {
-                throw new AppError(
-                    422,
-                    'BL_RELEASE_GATE_FAILED',
-                    'B/L Release Gate Failed: Original/Telex B/L has not been surrendered or carrier charges have not been settled.'
-                );
-            }
+        if (targetStatus === SeaImportStatus.RELEASE_PENDING) {
+            actionTaken = 'B/L release confirmed. File pending vessel arrival.';
         }
 
-        // Gate 2: Customs Release & Portbase Container Release Gates
-        if (targetStatus === 'cleared') {
-            const customsPassed =
-                Boolean(file.customs_release_gate_passed) || file.customs_declaration_status === 'accepted';
-            if (!customsPassed) {
-                throw new AppError(
-                    422,
-                    'CUSTOMS_RELEASE_GATE_FAILED',
-                    'Customs Release Gate Failed: Declaration has not been accepted by Douane/Customs.'
-                );
-            }
+        if (targetStatus === SeaImportStatus.IN_TRANSIT) {
+            actionTaken = 'Vessel departed. Cargo in transit.';
+        }
 
-            const containerPassed = Boolean(file.container_release_gate_passed);
-            if (!containerPassed) {
-                throw new AppError(
-                    422,
-                    'CONTAINER_RELEASE_GATE_FAILED',
-                    'Container Release Gate Failed: Portbase container release has not been received from the terminal.'
-                );
-            }
+        if (targetStatus === SeaImportStatus.ARRIVED) {
+            eventsToPublish.push('freight.file.arrived');
+            actionTaken = 'Vessel arrived recorded. Demurrage and free-time clock initiated.';
+        }
 
+        if (targetStatus === SeaImportStatus.CLEARED) {
             eventsToPublish.push('freight.file.cleared');
             actionTaken = 'Customs and terminal release verified. File cleared for drayage.';
         }
 
-        // Gate 3: Demurrage / Arrival milestone
-        if (targetStatus === 'arrived') {
-            eventsToPublish.push('freight.file.arrived');
-            actionTaken = 'Vessel arrived recorded. Demurrage and free-time clock initiated.';
-
-            if (file.free_time_expires_at) {
-                const freeTimeDate = new Date(file.free_time_expires_at).getTime();
-                const now = Date.now();
-                const hoursRemaining = (freeTimeDate - now) / (1000 * 60 * 60);
-                if (hoursRemaining < 48) {
-                    demurrageWarning = true;
-                }
-            }
-        }
-
-        if (targetStatus === 'delivered') {
+        if (targetStatus === SeaImportStatus.DELIVERED) {
             eventsToPublish.push('freight.file.delivered');
             actionTaken = 'Cargo delivered to consignee. POD captured.';
         }
 
-        if (targetStatus === 'closed') {
+        if (targetStatus === SeaImportStatus.CLOSED) {
             eventsToPublish.push('freight.file.closed');
             actionTaken = 'File cost captured and handed over to Finance/Invoicing.';
         }
@@ -117,5 +87,20 @@ export class SeaImportStateMachine {
             eventsToPublish,
             demurrageWarning,
         };
+    }
+
+    /**
+     * Returns gates that must pass for a given target status.
+     * Used by the service layer to selectively enforce gates.
+     */
+    public static requiredGatesForTransition(targetStatus: string): string[] {
+        switch (targetStatus) {
+            case SeaImportStatus.RELEASE_PENDING:
+                return ['BL_RELEASE'];
+            case SeaImportStatus.CLEARED:
+                return ['BL_RELEASE', 'CUSTOMS_RELEASE', 'CONTAINER_RELEASE'];
+            default:
+                return [];
+        }
     }
 }
