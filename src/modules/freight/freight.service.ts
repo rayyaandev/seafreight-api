@@ -5,6 +5,9 @@ import { SeaExportStateMachine } from './state-machine/export-state-machine.js';
 import { AuditService } from '../audit/audit.service.js';
 import { AppError } from '../../utils/response.js';
 import { SpecialStatus, SpecialType, GateCode, SeaImportStatus, SeaExportStatus } from '../../common/enums.js';
+import { OutboxService } from '../../bus/outbox.service.js';
+import db from '../../db/connection.js';
+import { PublishedEvents } from '../../common/events.js';
 
 function normalizeStatus(status: string): string {
     const s = status.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -134,6 +137,28 @@ export class FreightService {
             special_handling: specialType,
             special_status: initialSpecialStatus,
         });
+
+        // Enqueue creation event (best-effort, non-transactional for create since the file insert is not tx-aware)
+        try {
+            await db.transaction(async (trx) => {
+                await OutboxService.enqueue(trx, {
+                    workspaceId,
+                    eventType: PublishedEvents.FILE_CREATED,
+                    payload: {
+                        file_id: file.id,
+                        file_no: file.file_no,
+                        direction: file.direction,
+                        customer_id: file.customer_id,
+                        shipper_id: file.shipper_id,
+                        consignee_id: file.consignee_id,
+                        pol_id: file.pol_id,
+                        pod_id: file.pod_id,
+                    },
+                });
+            });
+        } catch (err) {
+            console.error('[FreightService] Failed to enqueue file.created event:', err);
+        }
 
         await AuditService.log({
             workspaceId,
@@ -753,16 +778,35 @@ export class FreightService {
             throw new AppError(400, 'INVALID_DIRECTION', `Unsupported direction '${file.direction}' for lifecycle transition`);
         }
 
-        // Apply status change with optimistic lock
-        const updated = await FreightRepository.update(id, workspaceId, version, {
-            status: canonicalTarget,
+        // Apply status change + outbox events atomically in a single DB transaction
+        const updated = await db.transaction(async (trx) => {
+            const result = await FreightRepository.updateWithTrx(trx, id, workspaceId, version, {
+                status: canonicalTarget,
+            });
+
+            if (!result) {
+                throw new AppError(409, 'CONFLICT', 'Failed to update file due to a concurrent modification.');
+            }
+
+            // Enqueue each domain event into the outbox within the same transaction
+            for (const eventType of transition.eventsToPublish) {
+                await OutboxService.enqueue(trx, {
+                    workspaceId,
+                    eventType,
+                    payload: {
+                        file_id: id,
+                        file_no: file.file_no,
+                        from_status: transition.fromStatus,
+                        to_status: transition.toStatus,
+                        reason,
+                    },
+                });
+            }
+
+            return result;
         });
 
-        if (!updated) {
-            throw new AppError(409, 'CONFLICT', 'Failed to update file due to a concurrent modification.');
-        }
-
-        // Write audit trail
+        // Write audit trail (outside transaction — non-blocking)
         await AuditService.log({
             workspaceId,
             actorId,

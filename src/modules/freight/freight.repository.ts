@@ -150,6 +150,33 @@ export class FreightRepository {
         return (await db<FreightFileEntity>('freight_file').where({ id }).first()) || null;
     }
 
+    /**
+     * Transaction-aware update. Same as update() but uses the provided Knex transaction
+     * so the caller can atomically commit business mutations + outbox events.
+     */
+    public static async updateWithTrx(
+        trx: import('knex').Knex.Transaction,
+        id: string,
+        workspaceId: string,
+        currentVersion: number,
+        updates: Partial<FreightFileEntity>
+    ): Promise<FreightFileEntity | null> {
+        const payload = sanitizeDates(updates);
+        const updatedCount = await trx('freight_file')
+            .where({ id, workspace_id: workspaceId, version: currentVersion })
+            .update({
+                ...payload,
+                version: currentVersion + 1,
+                updated_at: trx.fn.now(),
+            });
+
+        if (updatedCount === 0) {
+            return null;
+        }
+
+        return (await trx<FreightFileEntity>('freight_file').where({ id }).first()) || null;
+    }
+
     public static async deleteFile(id: string, workspaceId: string): Promise<boolean> {
         const affected = await db('freight_file')
             .where({ id, workspace_id: workspaceId })

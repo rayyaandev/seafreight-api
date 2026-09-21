@@ -152,6 +152,8 @@ export interface ContainerEntity extends BaseEntity {
     oog_dimensions?: string | null;
 }
 
+export type FreightContainerEntity = ContainerEntity;
+
 export interface FreightLineEntity extends BaseEntity {
     freight_file_id: string;
     description: string;
