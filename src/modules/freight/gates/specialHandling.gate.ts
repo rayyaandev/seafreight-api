@@ -1,5 +1,5 @@
 import { GateCode, SpecialStatus, SpecialType } from '../../../common/enums.js';
-import type { FreightFileEntity, FreightContainerEntity } from '../state-machine/types.js';
+import type { FreightFileEntity, FreightContainerEntity } from '../../../common/types.js';
 import type { GateContext, GateResult } from './gate.types.js';
 
 export interface SpecialHandlingEvaluation {

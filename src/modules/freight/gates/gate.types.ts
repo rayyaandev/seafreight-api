@@ -4,7 +4,7 @@ import type {
     FreightContainerEntity,
     BillOfLadingEntity,
     FreightLineEntity,
-} from '../state-machine/types.js';
+} from '../../../common/types.js';
 
 export interface GateContext {
     containers?: FreightContainerEntity[];

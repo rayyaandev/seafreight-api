@@ -1,5 +1,5 @@
 import { GateCode } from '../../../common/enums.js';
-import type { FreightFileEntity } from '../state-machine/types.js';
+import type { FreightFileEntity } from '../../../common/types.js';
 import type { GateContext, GateResult } from './gate.types.js';
 
 export function vgmCutoffGate(file: FreightFileEntity, context?: GateContext): GateResult {

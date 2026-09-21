@@ -1,4 +1,4 @@
-import type { FreightFileEntity } from '../state-machine/types.js';
+import type { FreightFileEntity } from '../../../common/types.js';
 import type { GateContext, GateResult } from './gate.types.js';
 import { validationGate } from './validation.gate.js';
 import { blReleaseGate } from './blRelease.gate.js';
