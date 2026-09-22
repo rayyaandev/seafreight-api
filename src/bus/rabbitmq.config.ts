@@ -68,7 +68,26 @@ export async function connectRabbitMQ(): Promise<void> {
                 'x-dead-letter-exchange': DLQ_EXCHANGE, // automatically sends rejected and corrupted messages to DLQ queue
             },
         });
-        await ch.bindQueue(CONSUMER_QUEUE, EXCHANGE, '#');
+        // Specific inbound event routing patterns consumed by Sea Freight module
+        const inboundRoutingKeys = [
+            'declaration.#',
+            'sales.#',
+            'document.#',
+            'trucking.#',
+            'wms.#',
+            'masterdata.#',
+        ];
+
+        // Clean up legacy catch-all binding if present
+        try {
+            await ch.unbindQueue(CONSUMER_QUEUE, EXCHANGE, '#');
+        } catch {
+            // Ignore if binding did not exist
+        }
+
+        for (const pattern of inboundRoutingKeys) {
+            await ch.bindQueue(CONSUMER_QUEUE, EXCHANGE, pattern);
+        }
 
         // Only push one message at a time to nodejs server
         await ch.prefetch(1);
