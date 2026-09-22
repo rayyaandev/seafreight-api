@@ -723,6 +723,24 @@ export class FreightService {
             );
         }
 
+        // Check for active critical exception cases blocking transitions
+        const activeCriticalCase = await db('exception_case')
+            .where({
+                freight_file_id: id,
+                workspace_id: workspaceId,
+                severity: 'critical',
+            })
+            .whereIn('status', ['Open', 'InProgress'])
+            .first();
+
+        if (activeCriticalCase) {
+            throw new AppError(
+                422,
+                'CRITICAL_EXCEPTION_BLOCKED',
+                `Transition blocked by active critical exception: "${activeCriticalCase.title}". Must be resolved before advancing.`
+            );
+        }
+
         const canonicalTarget = normalizeStatus(targetStatus);
 
         let transition: {
@@ -752,6 +770,30 @@ export class FreightService {
                 for (const requiredGateCode of requiredGates) {
                     const gateResult = gateEvaluation.gates.find((g) => g.gate === requiredGateCode);
                     if (gateResult && !gateResult.pass) {
+                        // Open an exception case if not already open for this gate
+                        const existingCase = await db('exception_case')
+                            .where({
+                                freight_file_id: id,
+                                workspace_id: workspaceId,
+                                gate_code: requiredGateCode,
+                            })
+                            .whereIn('status', ['Open', 'InProgress'])
+                            .first();
+
+                        if (!existingCase) {
+                            await FreightRepository.createException({
+                                workspace_id: workspaceId,
+                                freight_file_id: id,
+                                gate_code: requiredGateCode,
+                                type: 'gate_failure',
+                                severity: 'warn',
+                                status: 'Open',
+                                title: `${requiredGateCode} Gate Failed: ${gateResult.reason}`,
+                                description: gateResult.detail ? JSON.stringify(gateResult.detail) : null,
+                                created_by: actorId,
+                            });
+                        }
+
                         throw new AppError(
                             422,
                             `${requiredGateCode}_GATE_FAILED`,

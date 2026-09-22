@@ -8,6 +8,7 @@ import { errorHandler } from './middleware/error-handler.js';
 import { freightRouter } from './modules/freight/freight.router.js';
 import { masterDataRouter } from './modules/masterData/index.js';
 import { devRouter } from './modules/dev/dev.routes.js';
+import { exceptionsRouter } from './modules/exceptions/exceptions.routes.js';
 import { sendSuccess, sendError } from './utils/response.js';
 import db from './db/connection.js';
 
@@ -47,6 +48,9 @@ export function createApp(): Express {
 
     // Development & Event Simulation Routes (Guarded by RBAC dev.simulate)
     app.use('/v1/dev', authMiddleware, devRouter);
+
+    // Cross-Dossier Exception Hub Routes
+    app.use('/v1/exceptions', authMiddleware, exceptionsRouter);
 
     // 404 Handler
     app.use((req, res) => {
