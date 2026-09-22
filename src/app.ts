@@ -6,6 +6,7 @@ import { authRouter } from './auth/auth.router.js';
 import { authMiddleware } from './middleware/auth.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { freightRouter } from './modules/freight/freight.router.js';
+import { masterDataRouter } from './modules/masterData/index.js';
 import { sendSuccess, sendError } from './utils/response.js';
 import db from './db/connection.js';
 
@@ -39,6 +40,9 @@ export function createApp(): Express {
 
     // Protected Sea Freight Routes
     app.use('/v1/freight', authMiddleware, freightRouter);
+
+    // Protected Master Data Typeahead Routes
+    app.use('/v1/masterdata', authMiddleware, masterDataRouter);
 
     // 404 Handler
     app.use((req, res) => {
