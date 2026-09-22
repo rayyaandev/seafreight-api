@@ -7,7 +7,7 @@ export const USER_COORDINATOR_ID = '00000000-0000-0000-0000-000000000002';
 export const USER_CUSTOMS_ID = '00000000-0000-0000-0000-000000000003';
 export const USER_MANAGER_ID = '00000000-0000-0000-0000-000000000004';
 
-async function seed() {
+export async function seedDatabase() {
     console.log('🌱 Starting complete Sea Freight Foundation seed...');
 
     // 1. Clear existing data in reverse foreign key order
@@ -644,10 +644,13 @@ async function seed() {
     console.log('   - 1 Workspace, 3 Authenticated Users, 5 Roles & Permissions');
     console.log('   - 10 Clients, 20 UN/LOCODE Ports, 10 Incoterms, 6 Carriers');
     console.log('   - 4 Operational Sea Freight dossiers (Import & Export with IMDG/Reefer)');
-    process.exit(0);
 }
 
-seed().catch((err) => {
-    console.error('❌ Seeding error:', err);
-    process.exit(1);
-});
+if (process.argv[1]?.includes('01_sea_freight_seed')) {
+    seedDatabase()
+        .then(() => process.exit(0))
+        .catch((err) => {
+            console.error('❌ Seeding error:', err);
+            process.exit(1);
+        });
+}

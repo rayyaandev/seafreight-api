@@ -7,6 +7,7 @@ import { authMiddleware } from './middleware/auth.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { freightRouter } from './modules/freight/freight.router.js';
 import { masterDataRouter } from './modules/masterData/index.js';
+import { devRouter } from './modules/dev/dev.routes.js';
 import { sendSuccess, sendError } from './utils/response.js';
 import db from './db/connection.js';
 
@@ -43,6 +44,9 @@ export function createApp(): Express {
 
     // Protected Master Data Typeahead Routes
     app.use('/v1/masterdata', authMiddleware, masterDataRouter);
+
+    // Development & Event Simulation Routes (Guarded by RBAC dev.simulate)
+    app.use('/v1/dev', authMiddleware, devRouter);
 
     // 404 Handler
     app.use((req, res) => {

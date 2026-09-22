@@ -249,4 +249,5 @@ export const CreateChargeSchema = z.object({
 export const SimulateEventSchema = z.object({
     event_type: z.string().min(3),
     payload: z.record(z.string(), z.unknown()),
+    direct_dispatch: z.boolean().optional(),
 });
