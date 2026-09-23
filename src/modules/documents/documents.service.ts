@@ -144,7 +144,7 @@ export class DocumentsService {
                     };
 
                     if (isConnected()) {
-                        publish('document.ocr.completed', envelope as unknown as Record<string, unknown>);
+                        await publish('document.ocr.completed', envelope as unknown as Record<string, unknown>);
                     }
                     await handleDocumentOcr(envelope as any);
                 }

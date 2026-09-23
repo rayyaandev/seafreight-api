@@ -13,6 +13,8 @@ import {
     DocType,
     DrayageType,
     DrayageStatus,
+    T1EventType,
+    MilestoneType,
     ChargeLineType,
 } from './enums.js';
 
@@ -70,16 +72,11 @@ export const CreateFreightFileSchema = z.object({
     gate_cutoff: z.iso.datetime().nullish(),
     special_handling: z.enum([SpecialType.NONE, SpecialType.IMDG, SpecialType.REEFER, SpecialType.OOG]).default(SpecialType.NONE),
     free_time_days: z.number().int().min(0).default(5),
-    declaration_id: z.string().max(64).nullish(),
-    declaration_status: z.enum([
-        CustomsDeclarationStatus.NONE,
-        CustomsDeclarationStatus.SUBMITTED,
-        CustomsDeclarationStatus.ACCEPTED,
-        CustomsDeclarationStatus.REJECTED,
-        CustomsDeclarationStatus.UNDER_CONTROL,
-    ]).default(CustomsDeclarationStatus.NONE),
-    mrn: z.string().max(64).nullish(),
-    container_release_received_at: z.iso.datetime().nullish(),
+    // Customs and Portbase evidence is written only by the integration workflow.
+    declaration_id: z.never().optional(),
+    declaration_status: z.never().optional(),
+    mrn: z.never().optional(),
+    container_release_received_at: z.never().optional(),
     atd: z.iso.datetime().nullish(),
     lc_flag: z.boolean().default(false),
     total_cost: z.number().nullish(),
@@ -243,11 +240,34 @@ export const CreateDrayageOrderSchema = z.object({
     type: z.enum([DrayageType.IMPORT_DELIVERY, DrayageType.EXPORT_POSITIONING, DrayageType.EMPTY_REPOSITION]),
     terminal_name: z.string().min(2).max(100),
     facility_address: z.string().min(5).max(255),
+    pickup_address: z.string().min(5).max(255).nullish(),
+    delivery_address: z.string().min(5).max(255).nullish(),
+    planned_pickup_at: z.iso.datetime().nullish(),
+    planned_delivery_at: z.iso.datetime().nullish(),
     trucking_company: z.string().max(100).nullish(),
     driver_name: z.string().max(100).nullish(),
     truck_plate: z.string().max(20).nullish(),
     chassis_number: z.string().max(30).nullish(),
     scheduled_at: z.iso.datetime().nullish(),
+});
+
+export const UpdateDrayageOrderSchema = CreateDrayageOrderSchema.omit({ type: true }).partial().extend({
+    version: z.number().int().positive(),
+});
+
+export const CreateBondedEventSchema = z.object({
+    event_type: z.enum([T1EventType.T1_OPEN, T1EventType.T1_CLOSE, T1EventType.INSLAG, T1EventType.UITSLAG]),
+    mrn: z.string().max(64).nullish(),
+    bonded_warehouse_ref: z.string().max(100).nullish(),
+    document_id: z.uuid().nullish(),
+    occurred_at: z.iso.datetime().optional(),
+});
+
+export const CreateMilestoneSchema = z.object({
+    milestone_type: z.enum([MilestoneType.COLLECTED, MilestoneType.CUSTOMS_CLEARED,
+        MilestoneType.SAILED, MilestoneType.ARRIVED, MilestoneType.DELIVERED]),
+    timestamp: z.iso.datetime().optional(),
+    source: z.string().max(50).optional(),
 });
 
 export const CreateExceptionCaseSchema = z.object({

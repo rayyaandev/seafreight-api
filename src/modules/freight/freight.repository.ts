@@ -21,7 +21,8 @@ function sanitizeDates<T extends Record<string, any>>(obj: T): T {
         'doc_cutoff', 'vgm_cutoff', 'gate_cutoff',
         'vgm_submitted_at', 'gate_in_at', 'gate_out_at',
         'container_release_received_at', 'issue_date', 'released_at',
-        'scheduled_at', 'occurred_at', 'timestamp', 'delivered_at', 'resolved_at'
+        'scheduled_at', 'occurred_at', 'timestamp', 'delivered_at', 'resolved_at',
+        'planned_pickup_at', 'planned_delivery_at', 'actual_pickup_at', 'actual_delivery_at'
     ];
     for (const key of dateFields) {
         if (result[key] !== undefined && result[key] !== null && typeof result[key] === 'string') {
@@ -329,20 +330,25 @@ export class FreightRepository {
             .orderBy('created_at', 'asc');
     }
 
-    public static async createDrayageOrder(data: Partial<DrayageOrderEntity>): Promise<DrayageOrderEntity> {
+    public static async createDrayageOrder(data: Partial<DrayageOrderEntity>, trx?: import('knex').Knex.Transaction): Promise<DrayageOrderEntity> {
         const id = data.id || randomUUID();
         const payload = sanitizeDates(data);
         const orderNumber = data.order_number || `TR-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
 
-        await db('drayage_order').insert({
+        await (trx || db)('drayage_order').insert({
             ...payload,
             id,
             order_number: orderNumber,
             version: 1,
-            created_at: db.fn.now(),
-            updated_at: db.fn.now(),
+            created_at: (trx || db).fn.now(),
+            updated_at: (trx || db).fn.now(),
         });
-        return (await db<DrayageOrderEntity>('drayage_order').where('id', id).first())!;
+        return (await (trx || db)<DrayageOrderEntity>('drayage_order').where('id', id).first())!;
+    }
+
+    public static async getBondedEvents(freightFileId: string, workspaceId: string) {
+        return db('t1_bonded_event').where({ freight_file_id: freightFileId, workspace_id: workspaceId })
+            .orderBy('occurred_at', 'asc');
     }
 
     // ------------------------------------------------------------------------

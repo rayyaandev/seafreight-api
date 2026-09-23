@@ -99,6 +99,7 @@ export interface FreightFileEntity extends BaseEntity {
     consignee_id?: string | null;
     notify_party_id?: string | null;
     carrier_id?: string | null;
+    carrier_booking_ref?: string | null;
     pol_id?: string | null;
     pod_id?: string | null;
     incoterm_id?: string | null;
@@ -203,9 +204,16 @@ export interface DrayageOrderEntity extends BaseEntity {
     freight_file_id: string;
     container_id?: string | null;
     order_number: string;
+    trucking_order_id?: string | null;
     type: DrayageType | string;
     terminal_name: string;
     facility_address: string;
+    pickup_address?: string | null;
+    delivery_address?: string | null;
+    planned_pickup_at?: Date | string | null;
+    planned_delivery_at?: Date | string | null;
+    actual_pickup_at?: Date | string | null;
+    actual_delivery_at?: Date | string | null;
     trucking_company?: string | null;
     driver_name?: string | null;
     truck_plate?: string | null;
@@ -223,6 +231,7 @@ export interface T1BondedEventEntity extends BaseEntity {
     event_type: T1EventType | string;
     mrn?: string | null;
     bonded_warehouse_ref?: string | null;
+    document_id?: string | null;
     occurred_at: Date | string;
 }
 

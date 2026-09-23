@@ -137,6 +137,7 @@ export const DrayageStatus = {
     DRAFT: 'draft',
     SCHEDULED: 'scheduled',
     EN_ROUTE: 'en_route',
+    COLLECTED: 'collected',
     GATE_IN: 'gate_in',
     GATE_OUT: 'gate_out',
     DELIVERED: 'delivered',

@@ -28,11 +28,12 @@ async function processPendingOutbox(): Promise<void> {
             try {
                 const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
 
-                const published = publish(row.event_type, {
+                const published = await publish(row.event_type, {
                     id: row.event_id,
                     type: row.event_type,
                     occurred_at: new Date().toISOString(),
                     workspace_id: row.workspace_id,
+                    actor: 'system',
                     version: 1,
                     payload,
                 });

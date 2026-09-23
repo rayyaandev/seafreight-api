@@ -3,6 +3,8 @@ import { getChannel, CONSUMER_QUEUE } from './rabbitmq.config';
 import { handlerRegistry } from './handlers/index';
 import db from '../db/connection';
 import type { EventEnvelope } from '../common/events';
+import { section4EventTypes } from './handlers/section4.handler.js';
+import { operationalEventTypes } from './handlers/operational.handler.js';
 
 // Used to stop the consumer in a controlled manner
 let consumerTag: string | null = null;
@@ -34,6 +36,15 @@ export async function startConsumers(): Promise<void> {
         const eventType = envelope.type;
 
         try {
+            // Section 4 handlers own a transactional inbox; their mutation and dedup row commit together.
+            if (section4EventTypes.has(eventType) || operationalEventTypes.has(eventType)) {
+                const handler = handlerRegistry.get(eventType);
+                if (!handler) throw new Error(`Missing Section 4 handler for ${eventType}`);
+                await handler(envelope);
+                channel.ack(msg);
+                return;
+            }
+
             // ── Idempotency check ────────────────────────────────────────
             const existing = await db('processed_message')
                 .where('message_id', eventId)

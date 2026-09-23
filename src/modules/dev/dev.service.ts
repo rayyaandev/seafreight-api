@@ -4,6 +4,8 @@ import { isConnected, publish } from '../../bus/rabbitmq.config.js';
 import { handlerRegistry, type EventHandler } from '../../bus/handlers/index.js';
 import type { EventEnvelope } from '../../common/events.js';
 import { ConsumedEvents } from '../../common/events.js';
+import { section4EventTypes } from '../../bus/handlers/section4.handler.js';
+import { operationalEventTypes } from '../../bus/handlers/operational.handler.js';
 import { AppError } from '../../utils/response.js';
 
 export interface SimulateEventInput {
@@ -72,7 +74,7 @@ export class DevService {
         const useRabbitMQ = isConnected() && !direct_dispatch;
 
         if (useRabbitMQ) {
-            const published = publish(event_type, envelope as unknown as Record<string, unknown>);
+            const published = await publish(event_type, envelope as unknown as Record<string, unknown>);
             if (!published) {
                 throw new AppError(500, 'PUBLISH_FAILED', `Failed to publish event '${event_type}' to RabbitMQ exchange`);
             }
@@ -93,6 +95,11 @@ export class DevService {
         }
 
         // Check deduplication / processed_message table
+        if (section4EventTypes.has(event_type) || operationalEventTypes.has(event_type)) {
+            await handler(envelope);
+            return { simulated: true, event_id: envelope.id, event_type: envelope.type,
+                occurred_at: envelope.occurred_at, dispatched_via: 'direct_handler' };
+        }
         const existing = await db('processed_message').where('message_id', envelope.id).first();
         if (!existing) {
             await handler(envelope);
@@ -187,6 +194,15 @@ export class DevService {
                     status: 'gate_in',
                     driver_name: 'Jan de Vries',
                     license_plate: '12-BXZ-4',
+                },
+            },
+            {
+                event_type: ConsumedEvents.TRUCKING_ORDER_LINKED,
+                description: 'Trucking module links an outbound drayage request to its order ID.',
+                sample_payload: {
+                    drayage_order_id: '55555555-5555-5555-5555-555555555555',
+                    trucking_order_id: 'TRUCK-2026-001',
+                    status: 'scheduled',
                 },
             },
             {

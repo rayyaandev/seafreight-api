@@ -266,11 +266,10 @@ describe('Cross-Dossier Exception Hub API (/v1/exceptions)', () => {
         expect(file).toBeDefined();
 
         // 1. Advance to Arrived
-        const arrivedRes = await fetch(`${baseUrl}/v1/freight/files/${file.id}/transition`, {
+        const arrivedRes = await fetch(`${baseUrl}/v1/freight/files/${file.id}/record-ata`, {
             method: 'POST',
             headers: coordinatorHeaders,
             body: JSON.stringify({
-                target_status: 'arrived',
                 version: file.version,
             }),
         });

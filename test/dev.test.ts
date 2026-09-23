@@ -163,7 +163,7 @@ describe('Dev Event Simulator API (/v1/dev)', () => {
         const createdFile = await db('freight_file')
             .where('mode', 'sea')
             .where('direction', 'export')
-            .orderBy('created_at', 'desc')
+            .where('total_cost', 3450)
             .first();
 
         expect(createdFile).toBeDefined();
@@ -184,7 +184,7 @@ describe('Dev Event Simulator API (/v1/dev)', () => {
                 direct_dispatch: true,
                 payload: {
                     file_id: file.id,
-                    declaration_id: 'DEC-SIM-001',
+                    declaration_id: file.declaration_id,
                     mrn: testMrn,
                     accepted_at: new Date().toISOString(),
                 },

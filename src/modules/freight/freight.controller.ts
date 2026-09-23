@@ -256,6 +256,38 @@ export class FreightController {
         }
     }
 
+    public static async updateDrayageOrder(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, ...changes } = req.body;
+            const order = await FreightService.updateDrayageOrder(req.params.id as string,
+                req.params.orderId as string, workspaceId, actorId, version, changes);
+            sendSuccess(res, order);
+        } catch (error) { next(error); }
+    }
+
+    public static async cancelDrayageOrder(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const order = await FreightService.cancelDrayageOrder(req.params.id as string,
+                req.params.orderId as string, workspaceId, actorId, req.body.version);
+            sendSuccess(res, order);
+        } catch (error) { next(error); }
+    }
+
+    public static async addBondedEvent(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const row = await FreightService.addBondedEvent(req.params.id as string, workspaceId, actorId, req.body);
+            sendSuccess(res, row, 201);
+        } catch (error) { next(error); }
+    }
+
+    public static async listBondedEvents(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try { sendSuccess(res, await FreightService.listBondedEvents(req.params.id as string, req.context.workspaceId)); }
+        catch (error) { next(error); }
+    }
+
     // ------------------------------------------------------------------------
     // Child Operations: Milestones
     // ------------------------------------------------------------------------

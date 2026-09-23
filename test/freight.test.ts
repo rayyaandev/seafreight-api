@@ -481,42 +481,38 @@ describe('Freight Dossier & Child Entities', () => {
     });
 
     it('Import: deliver transitions Cleared -> Delivered', async () => {
-      // Simulate customs and container release via PATCH update
+      // Submit customs data to the bus, then receive the independent replies.
       const fRes = await fetch(`${baseUrl}/v1/freight/files/${testImportId}`, { headers });
       const fData = await json(fRes);
 
-      await fetch(`${baseUrl}/v1/freight/files/${testImportId}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({
-          version: fData.data.version,
-          declaration_status: 'accepted',
-          container_release_received_at: new Date().toISOString(),
-        }),
-      });
-
-      // Refetch and Clear
-      const fRes2 = await fetch(`${baseUrl}/v1/freight/files/${testImportId}`, { headers });
-      const fData2 = await json(fRes2);
-
-      const clearRes = await fetch(`${baseUrl}/v1/freight/files/${testImportId}/clear`, {
+      const submitRes = await fetch(`${baseUrl}/v1/integrations/files/${testImportId}/customs`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          version: fData2.data.version,
-          reason: 'Customs cleared & terminal release received',
-        }),
+        body: JSON.stringify({ version: fData.data.version }),
       });
-      const clearData = await json(clearRes);
-      expect(clearRes.status).toBe(200);
-      expect(clearData.data.file.status).toBe('Cleared');
+      expect(submitRes.status).toBe(202);
+      const submitData = await json(submitRes);
+      for (const [event_type, payload] of [
+        ['portbase.container.released', { file_id: testImportId, released_at: new Date().toISOString() }],
+        ['declaration.accepted', { file_id: testImportId, declaration_id: submitData.data.declaration_id,
+          mrn: '26NL12345678900001' }],
+      ] as const) {
+        const reply = await fetch(`${baseUrl}/v1/dev/simulate`, { method: 'POST', headers,
+          body: JSON.stringify({ event_type, payload, direct_dispatch: true }) });
+        expect(reply.status).toBe(200);
+      }
+
+      // Both replies arrived; gates now advance Arrived to Cleared.
+      const fRes2 = await fetch(`${baseUrl}/v1/freight/files/${testImportId}`, { headers });
+      const fData2 = await json(fRes2);
+      expect(fData2.data.status).toBe('Cleared');
 
       // Deliver
       const deliverRes = await fetch(`${baseUrl}/v1/freight/files/${testImportId}/deliver`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          version: clearData.data.file.version,
+          version: fData2.data.version,
           reason: 'Consignee signed POD',
         }),
       });

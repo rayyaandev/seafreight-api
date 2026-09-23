@@ -18,6 +18,9 @@ import {
     CreateFileDocumentSchema,
     CreateFileNoteSchema,
     CreateDrayageOrderSchema,
+    UpdateDrayageOrderSchema,
+    CreateBondedEventSchema,
+    CreateMilestoneSchema,
     CreateExceptionCaseSchema,
     CreateChargeSchema,
 } from '../../common/schemas.js';
@@ -77,9 +80,15 @@ freightRouter.post('/files/:id/notes', validateBody(CreateFileNoteSchema), requi
 // 6. Drayage Orders
 freightRouter.post('/files/:id/drayage-orders', validateBody(CreateDrayageOrderSchema), requirePermission('freight.file.update'), FreightController.addDrayageOrder);
 freightRouter.post('/files/:id/drayage', validateBody(CreateDrayageOrderSchema), requirePermission('freight.file.update'), FreightController.addDrayageOrder);
+freightRouter.patch('/files/:id/drayage-orders/:orderId', validateBody(UpdateDrayageOrderSchema), requirePermission('freight.file.update'), FreightController.updateDrayageOrder);
+freightRouter.post('/files/:id/drayage-orders/:orderId/cancel', validateBody(ActionVersionSchema), requirePermission('freight.file.update'), FreightController.cancelDrayageOrder);
+
+// T1 transit and bonded warehouse events
+freightRouter.get('/files/:id/bonded-events', requirePermission('freight.file.read'), FreightController.listBondedEvents);
+freightRouter.post('/files/:id/bonded-events', validateBody(CreateBondedEventSchema), requirePermission('freight.file.update'), FreightController.addBondedEvent);
 
 // 7. Milestones
-freightRouter.post('/files/:id/milestones', requirePermission('freight.file.update'), FreightController.addMilestone);
+freightRouter.post('/files/:id/milestones', validateBody(CreateMilestoneSchema), requirePermission('freight.file.update'), FreightController.addMilestone);
 
 // 8. Exception Cases
 freightRouter.post('/files/:id/exceptions', validateBody(CreateExceptionCaseSchema), requirePermission('exceptions.write'), FreightController.addExceptionCase);

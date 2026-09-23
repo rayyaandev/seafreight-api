@@ -1,8 +1,9 @@
 import amqplib from 'amqplib';
-import type { ChannelModel, Channel } from 'amqplib';
+import type { ChannelModel, Channel, ConfirmChannel } from 'amqplib';
 
 // ── Topology Constants ───────────────────────────────────────────────────────
 export const EXCHANGE = 'seafreight.events';
+export const CUSTOMS_EXCHANGE = 'customs.events';
 export const DLQ_EXCHANGE = 'seafreight.events.dlq';
 export const CONSUMER_QUEUE = 'seafreight.inbound';
 export const DLQ_QUEUE = 'seafreight.dlq';
@@ -10,6 +11,8 @@ export const DLQ_QUEUE = 'seafreight.dlq';
 // ── State ────────────────────────────────────────────────────────────────────
 let connection: ChannelModel | null = null;
 let channel: Channel | null = null;
+let publisherChannel: ConfirmChannel | null = null;
+let onConnected: (() => Promise<void>) | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let shutdownRequested = false;
 
@@ -34,6 +37,7 @@ export async function connectRabbitMQ(): Promise<void> {
         conn.on('close', () => {
             console.warn('[RabbitMQ] Connection closed');
             channel = null;
+            publisherChannel = null;
             connection = null;
             scheduleReconnect();
         });
@@ -60,6 +64,10 @@ export async function connectRabbitMQ(): Promise<void> {
          */
 
         await ch.assertExchange(EXCHANGE, 'topic', { durable: true });
+        await ch.assertExchange(CUSTOMS_EXCHANGE, 'topic', { durable: true });
+        publisherChannel = await conn.createConfirmChannel();
+        await publisherChannel.assertExchange(EXCHANGE, 'topic', { durable: true });
+        await publisherChannel.assertExchange(CUSTOMS_EXCHANGE, 'topic', { durable: true });
 
         // Consumer queue bound to all routing keys, with DLQ on rejection
         await ch.assertQueue(CONSUMER_QUEUE, {
@@ -73,9 +81,17 @@ export async function connectRabbitMQ(): Promise<void> {
             'declaration.#',
             'sales.#',
             'document.#',
-            'trucking.#',
+            'trucking.order.updated',
+            'trucking.order.linked',
             'wms.#',
             'masterdata.#',
+            'portbase.container.released',
+            'portbase.message.accepted',
+            'portbase.message.rejected',
+            'carrier.booking.confirmed',
+            'carrier.schedule.updated',
+            'terminal.container.gated_in',
+            'terminal.container.gated_out',
         ];
 
         // Clean up legacy catch-all binding if present
@@ -84,9 +100,17 @@ export async function connectRabbitMQ(): Promise<void> {
         } catch {
             // Ignore if binding did not exist
         }
+        try {
+            await ch.unbindQueue(CONSUMER_QUEUE, EXCHANGE, 'trucking.#');
+        } catch {
+            // Ignore if binding did not exist
+        }
 
         for (const pattern of inboundRoutingKeys) {
             await ch.bindQueue(CONSUMER_QUEUE, EXCHANGE, pattern);
+        }
+        for (const type of ['declaration.accepted', 'declaration.rejected', 'declaration.under_control']) {
+            await ch.bindQueue(CONSUMER_QUEUE, CUSTOMS_EXCHANGE, type);
         }
 
         // Only push one message at a time to nodejs server
@@ -94,9 +118,11 @@ export async function connectRabbitMQ(): Promise<void> {
 
         reconnectAttempt = 0;
         console.log('[RabbitMQ] Topology declared — exchange:', EXCHANGE, '| queue:', CONSUMER_QUEUE);
+        if (onConnected) await onConnected();
     } catch (err: any) {
         console.error('[RabbitMQ] Failed to connect:', err.message);
         channel = null;
+        publisherChannel = null;
         connection = null;
         scheduleReconnect();
     }
@@ -121,24 +147,32 @@ export function getChannel(): Channel | null {
 }
 
 export function isConnected(): boolean {
-    return channel !== null && connection !== null;
+    return channel !== null && publisherChannel !== null && connection !== null;
+}
+
+export function setOnConnected(callback: () => Promise<void>): void {
+    onConnected = callback;
 }
 
 /**
  * Publish a message to the main topic exchange.
- * Returns true if published, false if channel unavailable.
+ * Resolves only after the broker confirms the publish.
  */
-export function publish(routingKey: string, payload: Record<string, unknown>): boolean {
-    if (!channel) {
+export async function publish(routingKey: string, payload: Record<string, unknown>): Promise<boolean> {
+    const ch = publisherChannel;
+    if (!ch) {
         console.warn('[RabbitMQ] Cannot publish — channel not available. routingKey:', routingKey);
         return false;
     }
 
     const buffer = Buffer.from(JSON.stringify(payload));
-    return channel.publish(EXCHANGE, routingKey, buffer, {
-        persistent: true,
-        contentType: 'application/json',
-        timestamp: Math.floor(Date.now() / 1000),
+    return new Promise((resolve, reject) => {
+        const exchange = routingKey.startsWith('declaration.') ? CUSTOMS_EXCHANGE : EXCHANGE;
+        ch.publish(exchange, routingKey, buffer, {
+            persistent: true,
+            contentType: 'application/json',
+            timestamp: Math.floor(Date.now() / 1000),
+        }, (error) => error ? reject(error) : resolve(true));
     });
 }
 
@@ -151,6 +185,15 @@ export async function shutdownRabbitMQ(): Promise<void> {
     if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
+    }
+
+    try {
+        if (publisherChannel) {
+            await publisherChannel.close();
+            publisherChannel = null;
+        }
+    } catch {
+        // Channel may already be closed
     }
 
     try {

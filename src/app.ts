@@ -10,6 +10,8 @@ import { masterDataRouter } from './modules/masterData/index.js';
 import { devRouter } from './modules/dev/dev.routes.js';
 import { exceptionsRouter } from './modules/exceptions/exceptions.routes.js';
 import { documentsRouter } from './modules/documents/documents.routes.js';
+import { integrationRouter } from './modules/integrations/integration.router.js';
+import { webhookRouter } from './modules/integrations/webhook.router.js';
 import { sendSuccess, sendError } from './utils/response.js';
 import db from './db/connection.js';
 
@@ -18,6 +20,9 @@ export function createApp(): Express {
 
     app.use(cors());
     app.use(cookieParser());
+    app.use('/v1/webhooks', express.json({ verify: (req, _res, body) => {
+        (req as RequestWithRawBody).rawBody = Buffer.from(body);
+    } }), webhookRouter);
     app.use(express.json());
     if (process.env.NODE_ENV !== 'test') {
         app.use(morgan('dev'));
@@ -55,6 +60,7 @@ export function createApp(): Express {
 
     // Document Storage & Import OCR Routes
     app.use('/v1/documents', authMiddleware, documentsRouter);
+    app.use('/v1/integrations', authMiddleware, integrationRouter);
 
     // 404 Handler
     app.use((req, res) => {
@@ -66,5 +72,7 @@ export function createApp(): Express {
 
     return app;
 }
+
+type RequestWithRawBody = express.Request & { rawBody?: Buffer };
 
 export default createApp;

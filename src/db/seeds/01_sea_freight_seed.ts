@@ -16,6 +16,7 @@ export async function seedDatabase() {
     await db('audit_log').del();
     await db('document_ref').del();
     await db('target').del();
+    await db('integration_job').del();
     await db('charge').del();
     await db('exception_case').del();
     await db('milestone').del();

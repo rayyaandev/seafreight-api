@@ -15,9 +15,10 @@ export class OutboxService {
             workspaceId: string;
             eventType: string;
             payload: Record<string, unknown>;
+            eventId?: string;
         }
     ): Promise<string> {
-        const eventId = randomUUID();
+        const eventId = params.eventId || randomUUID();
         const id = randomUUID();
 
         await trx('outbox').insert({
