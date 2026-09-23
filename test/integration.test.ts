@@ -129,14 +129,29 @@ describe('Sea Freight API Integration', () => {
 
     // ── 7. Gate Violation ───────────────────────────────────────────────
 
-    it('Import file transitions to arrived', async () => {
-      const res = await fetch(`${baseUrl}/v1/freight/files/${importFile.id}/transition`, {
+    it('Import file requires ATA before transition to arrived', async () => {
+      const blocked = await fetch(`${baseUrl}/v1/freight/files/${importFile.id}/transition`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
           target_status: 'arrived',
           version: importFile.version,
         }),
+      });
+      const blockedData = await json(blocked);
+      expect(blocked.status).toBe(422);
+      expect(blockedData.error.code).toBe('ATA_REQUIRED');
+
+      const patchRes = await fetch(`${baseUrl}/v1/freight/files/${importFile.id}`, {
+        method: 'PATCH', headers,
+        body: JSON.stringify({ version: importFile.version, ata: new Date().toISOString() }),
+      });
+      const patched = await json(patchRes);
+      expect(patchRes.status).toBe(200);
+
+      const res = await fetch(`${baseUrl}/v1/freight/files/${importFile.id}/transition`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ target_status: 'arrived', version: patched.data.version }),
       });
       expect(res.status).toBe(200);
     });

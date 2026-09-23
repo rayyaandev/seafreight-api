@@ -9,6 +9,7 @@ import { freightRouter } from './modules/freight/freight.router.js';
 import { masterDataRouter } from './modules/masterData/index.js';
 import { devRouter } from './modules/dev/dev.routes.js';
 import { exceptionsRouter } from './modules/exceptions/exceptions.routes.js';
+import { documentsRouter } from './modules/documents/documents.routes.js';
 import { sendSuccess, sendError } from './utils/response.js';
 import db from './db/connection.js';
 
@@ -51,6 +52,9 @@ export function createApp(): Express {
 
     // Cross-Dossier Exception Hub Routes
     app.use('/v1/exceptions', authMiddleware, exceptionsRouter);
+
+    // Document Storage & Import OCR Routes
+    app.use('/v1/documents', authMiddleware, documentsRouter);
 
     // 404 Handler
     app.use((req, res) => {

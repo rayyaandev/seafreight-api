@@ -10,8 +10,8 @@ export class DevController {
     static simulate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
             const context = {
-                user_id: req.context?.user_id,
-                workspace_id: req.context?.workspace_id,
+                user_id: req.context?.actorId,
+                workspace_id: req.context?.workspaceId,
             };
 
             const result = await DevService.simulateEvent(req.body, context);

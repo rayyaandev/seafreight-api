@@ -123,7 +123,7 @@ describe('Freight Dossier & Child Entities', () => {
       expect(res.status).toBe(201);
       expect(data.data.file_no).toMatch(/^SF-2026-/);
       expect(data.data.status).toBe('Draft');
-      expect(data.data.special_status).toBe('ORANGE');
+      expect(data.data.special_status).toBe('RED');
 
       fileId = data.data.id;
       fileVersion = data.data.version;
@@ -206,8 +206,10 @@ describe('Freight Dossier & Child Entities', () => {
           cargo_weight_kg: 21000,
           vgm_kg: 25200,
           temperature_setpoint_c: -18.5,
+          ventilation_cbm_hr: 0,
           humidity_percent: 85,
           pre_trip_inspection_passed: true,
+          reefer_monitoring_confirmed: true,
         }),
       });
       const data = await json(res);
@@ -374,7 +376,7 @@ describe('Freight Dossier & Child Entities', () => {
   // ── 8. Special Handling Override ─────────────────────────────────────────
 
   describe('8. Special Handling Override', () => {
-    it('POST /v1/freight/files/:id/special-handling updates override status', async () => {
+    it('POST /v1/freight/files/:id/special-handling recomputes status', async () => {
       // Fetch latest version
       const latestRes = await fetch(`${baseUrl}/v1/freight/files/${fileId}`, { headers });
       const latestData = await json(latestRes);
@@ -386,14 +388,13 @@ describe('Freight Dossier & Child Entities', () => {
         body: JSON.stringify({
           version: currentVersion,
           special_handling: 'IMDG',
-          special_status: 'ORANGE',
           reason: 'Awaiting shipper MSDS confirmation sheet',
         }),
       });
       const data = await json(res);
       expect(res.status).toBe(200);
       expect(data.data.special_handling).toBe('IMDG');
-      expect(data.data.special_status).toBe('ORANGE');
+      expect(data.data.special_status).toBe('RED');
     });
   });
 
@@ -447,7 +448,21 @@ describe('Freight Dossier & Child Entities', () => {
       expect(data.data.file.status).toBe('ReleasePending');
     });
 
-    it('Import: record-ata transitions ReleasePending -> Arrived and calculates free time', async () => {
+    it('Import: generic transitions require ATD and ATA', async () => {
+      const fileRes = await fetch(`${baseUrl}/v1/freight/files/${testImportId}`, { headers });
+      const fileData = await json(fileRes);
+      for (const [target, code] of [['InTransit', 'ATD_REQUIRED'], ['Arrived', 'ATA_REQUIRED']]) {
+        const res = await fetch(`${baseUrl}/v1/freight/files/${testImportId}/transition`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ version: fileData.data.version, target_status: target }),
+        });
+        const data = await json(res);
+        expect(res.status).toBe(422);
+        expect(data.error.code).toBe(code);
+      }
+    });
+
+    it('Import: record-ata defaults ATA to current time and transitions to Arrived', async () => {
       const fRes = await fetch(`${baseUrl}/v1/freight/files/${testImportId}`, { headers });
       const fData = await json(fRes);
 
@@ -456,7 +471,6 @@ describe('Freight Dossier & Child Entities', () => {
         headers,
         body: JSON.stringify({
           version: fData.data.version,
-          ata: new Date().toISOString(),
           reason: 'Vessel berthed at ECT Delta',
         }),
       });
@@ -534,6 +548,7 @@ describe('Freight Dossier & Child Entities', () => {
           direction: 'export',
           vessel: 'CMA CGM Jacques Saade',
           voyage: '2603E',
+          vgm_cutoff: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
         }),
       });
       const createData = await json(createRes);
@@ -552,20 +567,16 @@ describe('Freight Dossier & Child Entities', () => {
       expect(bookRes.status).toBe(200);
       expect(bookData.data.file.status).toBe('Booked');
 
-      // 3. Submit VGM
-      const vgmRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}/submit-vgm`, {
+      const missingVgmRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}/submit-vgm`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          version: bookData.data.file.version,
-          reason: 'Shipper confirmed certified weights',
-        }),
+        body: JSON.stringify({ version: bookData.data.file.version }),
       });
-      const vgmData = await json(vgmRes);
-      expect(vgmRes.status).toBe(200);
-      expect(vgmData.data.file.status).toBe('VgmSiSubmitted');
+      const missingVgmData = await json(missingVgmRes);
+      expect(missingVgmRes.status).toBe(422);
+      expect(missingVgmData.error.code).toBe('VGM_CUTOFF_GATE_FAILED');
 
-      // 4. Add container with VGM to pass load gate
+      // 3. Add a container with VGM submitted before the cut-off
       await fetch(`${baseUrl}/v1/freight/files/${testExportId}/containers`, {
         method: 'POST',
         headers,
@@ -578,6 +589,31 @@ describe('Freight Dossier & Child Entities', () => {
           vgm_submitted_at: new Date().toISOString(),
         }),
       });
+
+      const beforeVgmRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}`, { headers });
+      const beforeVgmData = await json(beforeVgmRes);
+
+      const prematureLoadRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}/load`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ version: beforeVgmData.data.version }),
+      });
+      const prematureLoadData = await json(prematureLoadRes);
+      expect(prematureLoadRes.status).toBe(400);
+      expect(prematureLoadData.error.code).toBe('INVALID_TRANSITION');
+
+      // 4. Submit VGM
+      const vgmRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}/submit-vgm`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          version: beforeVgmData.data.version,
+          reason: 'Shipper confirmed certified weights',
+        }),
+      });
+      const vgmData = await json(vgmRes);
+      expect(vgmRes.status).toBe(200);
+      expect(vgmData.data.file.status).toBe('VgmSiSubmitted');
 
       const fRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}`, { headers });
       const fData = await json(fRes);

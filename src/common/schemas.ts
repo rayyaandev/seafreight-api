@@ -87,8 +87,10 @@ export const CreateFreightFileSchema = z.object({
 });
 
 // Status is NOT editable via PATCH per PDF rules!
-export const UpdateFreightFileSchema = CreateFreightFileSchema.partial().extend({
+export const UpdateFreightFileSchema = CreateFreightFileSchema.omit({ special_handling: true }).partial().extend({
     version: z.number().int().positive({ message: 'Version is required for optimistic concurrency control' }),
+    special_handling: z.never().optional(),
+    special_status: z.never().optional(),
 });
 
 export const ActionVersionSchema = z.object({
@@ -104,16 +106,15 @@ export const TransitionActionSchema = z.object({
 
 export const RecordAtaSchema = z.object({
     version: z.number().int().positive({ message: 'Version is required for optimistic concurrency control' }),
-    ata: z.string().optional(),
+    ata: z.iso.datetime().optional(),
     reason: z.string().optional(),
 });
 
 export const SpecialHandlingOverrideSchema = z.object({
-    version: z.number().int().positive().optional(),
+    version: z.number().int().positive(),
     special_handling: z.enum([SpecialType.NONE, SpecialType.IMDG, SpecialType.REEFER, SpecialType.OOG]),
-    special_status: z.enum([SpecialStatus.GREEN, SpecialStatus.ORANGE, SpecialStatus.RED]),
     reason: z.string().optional(),
-});
+}).strict();
 
 
 // ----------------------------------------------------------------------------
@@ -138,7 +139,7 @@ export const CreateContainerSchema = z.object({
     vgm_kg: z.number().nullish(),
     vgm_submitted_at: z.iso.datetime().nullish(),
     vgm_method: z.enum([VgmMethod.METHOD_1, VgmMethod.METHOD_2]).nullish(),
-    gate_in_at: z.iso.datetime().nullish(),
+    gate_in_at: z.never().optional(),
     gate_out_at: z.iso.datetime().nullish(),
     temperature_setpoint_c: z.number().nullish(),
     ventilation_cbm_hr: z.number().nullish(),
@@ -151,9 +152,36 @@ export const CreateContainerSchema = z.object({
     msds_attached: z.boolean().default(false),
     dg_declaration_attached: z.boolean().default(false),
     carrier_dg_accepted: z.boolean().default(false),
+    dg_segregation_requirements: z.string().max(500).nullish(),
+    reefer_monitoring_confirmed: z.boolean().default(false),
     is_oog: z.boolean().default(false),
     oog_dimensions: z.string().nullish(),
 });
+
+export const UpdateContainerHandlingSchema = z.object({
+    version: z.number().int().positive(),
+    type: CreateContainerSchema.shape.type.optional(),
+    temperature_setpoint_c: z.number().nullish(),
+    ventilation_cbm_hr: z.number().nullish(),
+    humidity_percent: z.number().nullish(),
+    pre_trip_inspection_passed: z.boolean().optional(),
+    imdg_class: z.string().max(10).nullish(),
+    un_number: z.string().max(10).nullish(),
+    packing_group: z.enum([PackingGroup.I, PackingGroup.II, PackingGroup.III]).nullish(),
+    proper_shipping_name: z.string().max(255).nullish(),
+    msds_attached: z.boolean().optional(),
+    dg_declaration_attached: z.boolean().optional(),
+    carrier_dg_accepted: z.boolean().optional(),
+    dg_segregation_requirements: z.string().max(500).nullish(),
+    reefer_monitoring_confirmed: z.boolean().optional(),
+    is_oog: z.boolean().optional(),
+    oog_dimensions: z.string().nullish(),
+}).strict();
+
+export const GateInContainerSchema = z.object({
+    version: z.number().int().positive(),
+    gate_in_at: z.iso.datetime().optional(),
+}).strict();
 
 export const CreateFreightLineSchema = z.object({
     description: z.string().min(1).max(255),

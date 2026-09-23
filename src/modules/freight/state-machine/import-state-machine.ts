@@ -1,4 +1,5 @@
 import { SeaImportStatus } from '../../../common/enums.js';
+import type { FreightFileEntity } from '../../../common/types.js';
 import { AppError } from '../../../utils/response.js';
 
 export interface ImportTransitionResult {
@@ -26,6 +27,26 @@ export class SeaImportStateMachine {
         [SeaImportStatus.DELIVERED]: [SeaImportStatus.CLOSED],
         [SeaImportStatus.CLOSED]: [],
     };
+
+    /** A lifecycle milestone must have its actual timestamp before status advances. */
+    public static validateMilestoneTimestamp(
+        file: Pick<FreightFileEntity, 'atd' | 'ata'>,
+        targetStatus: string
+    ): void {
+        const timestamp = targetStatus === SeaImportStatus.IN_TRANSIT
+            ? { value: file.atd, field: 'ATD' }
+            : targetStatus === SeaImportStatus.ARRIVED
+                ? { value: file.ata, field: 'ATA' }
+                : null;
+
+        if (timestamp && (!timestamp.value || Number.isNaN(new Date(timestamp.value).getTime()))) {
+            throw new AppError(
+                422,
+                `${timestamp.field}_REQUIRED`,
+                `Record a valid ${timestamp.field} before transitioning to '${targetStatus}'.`
+            );
+        }
+    }
 
     /**
      * Validates whether a status transition is structurally allowed.

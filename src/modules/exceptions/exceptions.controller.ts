@@ -27,7 +27,7 @@ export class ExceptionsController {
     static getException = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
             const workspaceId = req.context?.workspaceId || '00000000-0000-0000-0000-000000000001';
-            const { id } = req.params;
+            const id = req.params.id as string;
 
             const item = await ExceptionsService.getExceptionById(id, workspaceId);
             sendSuccess(res, item, 200);
@@ -44,7 +44,7 @@ export class ExceptionsController {
         try {
             const workspaceId = req.context?.workspaceId || '00000000-0000-0000-0000-000000000001';
             const actorId = req.context?.actorId;
-            const { id } = req.params;
+            const id = req.params.id as string;
             const body = req.body as UpdateExceptionCaseInput;
 
             const updated = await ExceptionsService.updateException(id, workspaceId, actorId, body);

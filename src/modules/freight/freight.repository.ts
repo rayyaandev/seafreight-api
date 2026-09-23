@@ -191,27 +191,28 @@ export class FreightRepository {
     // ------------------------------------------------------------------------
     // Containers
     // ------------------------------------------------------------------------
-    public static async getContainers(freightFileId: string): Promise<FreightContainerEntity[]> {
-        return db<FreightContainerEntity>('freight_container')
+    public static async getContainers(freightFileId: string, trx?: import('knex').Knex.Transaction): Promise<FreightContainerEntity[]> {
+        return (trx || db)<FreightContainerEntity>('freight_container')
             .where('freight_file_id', freightFileId)
             .orderBy('created_at', 'asc');
     }
 
-    public static async createContainer(data: Partial<FreightContainerEntity>): Promise<FreightContainerEntity> {
+    public static async createContainer(data: Partial<FreightContainerEntity>, trx?: import('knex').Knex.Transaction): Promise<FreightContainerEntity> {
         const id = data.id || randomUUID();
         const payload = sanitizeDates(data);
-        await db('freight_container').insert({
+        const connection = trx || db;
+        await connection('freight_container').insert({
             ...payload,
             id,
             version: 1,
-            created_at: db.fn.now(),
-            updated_at: db.fn.now(),
+            created_at: connection.fn.now(),
+            updated_at: connection.fn.now(),
         });
-        return (await db<FreightContainerEntity>('freight_container').where('id', id).first())!;
+        return (await connection<FreightContainerEntity>('freight_container').where('id', id).first())!;
     }
 
-    public static async deleteContainer(containerId: string, freightFileId: string): Promise<boolean> {
-        const affected = await db('freight_container')
+    public static async deleteContainer(containerId: string, freightFileId: string, trx?: import('knex').Knex.Transaction): Promise<boolean> {
+        const affected = await (trx || db)('freight_container')
             .where({ id: containerId, freight_file_id: freightFileId })
             .del();
         return affected > 0;

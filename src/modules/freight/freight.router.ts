@@ -11,6 +11,8 @@ import {
     ActionVersionSchema,
     SpecialHandlingOverrideSchema,
     CreateContainerSchema,
+    UpdateContainerHandlingSchema,
+    GateInContainerSchema,
     CreateFreightLineSchema,
     CreateBillOfLadingSchema,
     CreateFileDocumentSchema,
@@ -54,6 +56,8 @@ freightRouter.post('/files/:id/close', validateBody(ActionVersionSchema), requir
 // Child Collections
 // 1. Containers
 freightRouter.post('/files/:id/containers', validateBody(CreateContainerSchema), requirePermission('freight.file.update'), FreightController.addContainer);
+freightRouter.patch('/files/:id/containers/:containerId/special-handling', validateBody(UpdateContainerHandlingSchema), requirePermission('freight.file.special_handling'), FreightController.updateContainerHandling);
+freightRouter.post('/files/:id/containers/:containerId/gate-in', validateBody(GateInContainerSchema), requirePermission('freight.file.update'), FreightController.gateInContainer);
 freightRouter.delete('/files/:id/containers/:containerId', requirePermission('freight.file.update'), FreightController.deleteContainer);
 
 // 2. Freight Lines

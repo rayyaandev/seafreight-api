@@ -18,6 +18,7 @@ export const PublishedEvents = {
     FILE_CLEARED: 'freight.file.cleared',
     FILE_DELIVERED: 'freight.file.delivered',
     FILE_CLOSED: 'freight.file.closed',
+    CONTAINER_GATED_IN: 'freight.container.gated_in',
 } as const;
 
 export const ConsumedEvents = {

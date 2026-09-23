@@ -1,5 +1,5 @@
 import { FreightRepository } from './freight.repository.js';
-import { evaluateAllGates, evaluateSpecialHandlingDetails } from './gates/index.js';
+import { evaluateAllGates, evaluateSpecialHandlingDetails, specialHandlingGate } from './gates/index.js';
 import { SeaImportStateMachine } from './state-machine/import-state-machine.js';
 import { SeaExportStateMachine } from './state-machine/export-state-machine.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -125,7 +125,7 @@ export class FreightService {
 
         const initialStatus = 'Draft';
         const specialType = data.special_handling || SpecialType.NONE;
-        const initialSpecialStatus = specialType !== SpecialType.NONE ? SpecialStatus.ORANGE : SpecialStatus.GREEN;
+        const initialSpecialStatus = evaluateSpecialHandlingDetails(specialType, []).status;
 
         const file = await FreightRepository.create({
             ...data,
@@ -194,7 +194,7 @@ export class FreightService {
         }
 
         // Prevent updating lifecycle status via direct PATCH
-        const { status: _ignoredStatus, ...sanitizedUpdates } = updates;
+        const { status: _ignoredStatus, special_handling: _ignoredHandling, special_status: _ignoredSpecialStatus, ...sanitizedUpdates } = updates;
 
         const updated = await FreightRepository.update(id, workspaceId, version, sanitizedUpdates);
         if (!updated) {
@@ -217,10 +217,9 @@ export class FreightService {
         id: string,
         workspaceId: string,
         actorId: string,
-        version: number | undefined,
+        version: number,
         override: {
             special_handling: SpecialType;
-            special_status?: SpecialStatus;
             reason?: string;
         }
     ) {
@@ -229,8 +228,7 @@ export class FreightService {
             throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${id}' not found`);
         }
 
-        const targetVersion = version !== undefined && !isNaN(version) ? version : current.version;
-        if (current.version !== targetVersion) {
+        if (current.version !== version) {
             throw new AppError(
                 409,
                 'CONFLICT',
@@ -240,12 +238,15 @@ export class FreightService {
 
         const containers = await FreightRepository.getContainers(id);
         const autoEval = evaluateSpecialHandlingDetails(override.special_handling, containers);
-        const targetSpecialStatus = override.special_status || autoEval.status;
+        const targetSpecialStatus = autoEval.status;
 
-        const updated = await FreightRepository.update(id, workspaceId, targetVersion, {
+        const updated = await FreightRepository.update(id, workspaceId, version, {
             special_handling: override.special_handling,
             special_status: targetSpecialStatus,
         });
+        if (!updated) {
+            throw new AppError(409, 'CONFLICT', 'File changed while updating special handling. Refresh and retry.');
+        }
 
         await AuditService.log({
             workspaceId,
@@ -265,6 +266,107 @@ export class FreightService {
         return updated;
     }
 
+    private static async recordSpecialGateFailure(
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string,
+        reason: string,
+        details?: unknown
+    ): Promise<void> {
+        const existing = await db('exception_case')
+            .where({ freight_file_id: freightFileId, workspace_id: workspaceId, gate_code: GateCode.SPECIAL_HANDLING })
+            .whereIn('status', ['Open', 'InProgress'])
+            .first();
+        if (!existing) {
+            await FreightRepository.createException({
+                workspace_id: workspaceId,
+                freight_file_id: freightFileId,
+                gate_code: GateCode.SPECIAL_HANDLING,
+                type: 'gate_failure',
+                severity: 'warn',
+                status: 'Open',
+                title: 'Special handling gate failed',
+                description: JSON.stringify({ reason, details }),
+                created_by: actorId,
+            });
+        }
+    }
+
+    public static async updateContainerHandling(
+        containerId: string,
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        updates: Partial<FreightContainerEntity>
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) throw new AppError(404, 'NOT_FOUND', `Freight file '${freightFileId}' not found`);
+        const result = await db.transaction(async (trx) => {
+            const affected = await trx('freight_container')
+                .where({ id: containerId, freight_file_id: freightFileId, workspace_id: workspaceId, version })
+                .update({ ...updates, version: version + 1, updated_at: trx.fn.now() });
+            if (!affected) throw new AppError(409, 'CONFLICT', 'Container not found or version changed. Refresh and retry.');
+            const containers = await trx<FreightContainerEntity>('freight_container').where('freight_file_id', freightFileId);
+            const evaluation = evaluateSpecialHandlingDetails(file.special_handling, containers);
+            const updatedFile = await FreightRepository.updateWithTrx(trx, freightFileId, workspaceId, file.version, {
+                special_status: evaluation.status,
+            });
+            if (!updatedFile) throw new AppError(409, 'CONFLICT', 'File changed while updating container. Refresh and retry.');
+            const container = await trx<FreightContainerEntity>('freight_container').where('id', containerId).first();
+            return { container, special_handling_evaluation: evaluation, file_version: updatedFile.version };
+        });
+        await AuditService.log({
+            workspaceId, actorId, entityType: 'container', entityId: containerId,
+            action: 'special_handling_update', payload: { freight_file_id: freightFileId, ...updates },
+        });
+        return result;
+    }
+
+    public static async gateInContainer(
+        containerId: string,
+        freightFileId: string,
+        workspaceId: string,
+        actorId: string,
+        version: number,
+        gateInAt?: string
+    ) {
+        const file = await FreightRepository.findById(freightFileId, workspaceId);
+        if (!file) throw new AppError(404, 'NOT_FOUND', `Freight file '${freightFileId}' not found`);
+        if (file.version !== version) throw new AppError(409, 'CONFLICT', 'File version changed. Refresh and retry.');
+        const containers = await FreightRepository.getContainers(freightFileId);
+        const container = containers.find((item) => item.id === containerId);
+        if (!container) throw new AppError(404, 'NOT_FOUND', `Container '${containerId}' not found on file`);
+        if (container.gate_in_at) throw new AppError(409, 'ALREADY_GATED_IN', 'Container already has a gate-in timestamp');
+        const gate = specialHandlingGate(file, { containers });
+        if (!gate.pass) {
+            await this.recordSpecialGateFailure(freightFileId, workspaceId, actorId, gate.reason || 'Special handling RED', gate.details);
+            throw new AppError(422, 'SPECIAL_HANDLING_GATE_FAILED', gate.reason || 'Special handling RED', undefined, gate.details);
+        }
+        const timestamp = gateInAt ? new Date(gateInAt) : new Date();
+        const result = await db.transaction(async (trx) => {
+            const updatedFile = await FreightRepository.updateWithTrx(trx, freightFileId, workspaceId, version, {});
+            if (!updatedFile) throw new AppError(409, 'CONFLICT', 'File version changed. Refresh and retry.');
+            const affected = await trx('freight_container')
+                .where({ id: containerId, freight_file_id: freightFileId, workspace_id: workspaceId, version: container.version })
+                .whereNull('gate_in_at')
+                .update({ gate_in_at: timestamp, version: container.version + 1, updated_at: trx.fn.now() });
+            if (!affected) throw new AppError(409, 'CONFLICT', 'Container changed while recording gate-in. Refresh and retry.');
+            await OutboxService.enqueue(trx, {
+                workspaceId,
+                eventType: PublishedEvents.CONTAINER_GATED_IN,
+                payload: { file_id: freightFileId, container_id: containerId, gate_in_at: timestamp.toISOString() },
+            });
+            const updatedContainer = await trx<FreightContainerEntity>('freight_container').where('id', containerId).first();
+            return { container: updatedContainer, file_version: updatedFile.version };
+        });
+        await AuditService.log({
+            workspaceId, actorId, entityType: 'container', entityId: containerId,
+            action: 'gate_in', payload: { freight_file_id: freightFileId, gate_in_at: timestamp.toISOString() },
+        });
+        return result;
+    }
+
     // ------------------------------------------------------------------------
     // Child Operations: Containers
     // ------------------------------------------------------------------------
@@ -278,23 +380,25 @@ export class FreightService {
         if (!file) {
             throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
         }
-
-        const container = await FreightRepository.createContainer({
-            ...containerData,
-            workspace_id: workspaceId,
-            created_by: actorId,
-            freight_file_id: freightFileId,
-        });
-
-        // Re-evaluate Special Handling status on parent dossier
-        const allContainers = await FreightRepository.getContainers(freightFileId);
-        const evalResult = evaluateSpecialHandlingDetails(file.special_handling, allContainers);
-
-        if (file.special_status !== evalResult.status) {
-            await FreightRepository.update(file.id, workspaceId, file.version, {
-                special_status: evalResult.status,
-            });
+        if (containerData.gate_in_at) {
+            throw new AppError(422, 'GATE_IN_ACTION_REQUIRED', 'Use the guarded gate-in action to record terminal entry.');
         }
+
+        const container = await db.transaction(async (trx) => {
+            const created = await FreightRepository.createContainer({
+                ...containerData,
+                workspace_id: workspaceId,
+                created_by: actorId,
+                freight_file_id: freightFileId,
+            }, trx);
+            const allContainers = await FreightRepository.getContainers(freightFileId, trx);
+            const evaluation = evaluateSpecialHandlingDetails(file.special_handling, allContainers);
+            const updatedFile = await FreightRepository.updateWithTrx(trx, file.id, workspaceId, file.version, {
+                special_status: evaluation.status,
+            });
+            if (!updatedFile) throw new AppError(409, 'CONFLICT', 'File changed while adding container. Refresh and retry.');
+            return created;
+        });
 
         await AuditService.log({
             workspaceId,
@@ -319,19 +423,18 @@ export class FreightService {
             throw new AppError(404, 'NOT_FOUND', `Freight file with ID '${freightFileId}' not found`);
         }
 
-        const deleted = await FreightRepository.deleteContainer(containerId, freightFileId);
-        if (!deleted) {
-            throw new AppError(404, 'NOT_FOUND', `Container '${containerId}' not found on file '${freightFileId}'`);
-        }
-
-        const allContainers = await FreightRepository.getContainers(freightFileId);
-        const evalResult = evaluateSpecialHandlingDetails(file.special_handling, allContainers);
-
-        if (file.special_status !== evalResult.status) {
-            await FreightRepository.update(file.id, workspaceId, file.version, {
-                special_status: evalResult.status,
+        await db.transaction(async (trx) => {
+            const deleted = await FreightRepository.deleteContainer(containerId, freightFileId, trx);
+            if (!deleted) {
+                throw new AppError(404, 'NOT_FOUND', `Container '${containerId}' not found on file '${freightFileId}'`);
+            }
+            const allContainers = await FreightRepository.getContainers(freightFileId, trx);
+            const evaluation = evaluateSpecialHandlingDetails(file.special_handling, allContainers);
+            const updatedFile = await FreightRepository.updateWithTrx(trx, file.id, workspaceId, file.version, {
+                special_status: evaluation.status,
             });
-        }
+            if (!updatedFile) throw new AppError(409, 'CONFLICT', 'File changed while deleting container. Refresh and retry.');
+        });
 
         await AuditService.log({
             workspaceId,
@@ -754,6 +857,7 @@ export class FreightService {
         if (file.direction === 'import') {
             // 1. Validate structural transition
             transition = SeaImportStateMachine.validateTransition(file.status, canonicalTarget);
+            SeaImportStateMachine.validateMilestoneTimestamp(file, canonicalTarget);
 
             // 2. Enforce required gates
             const requiredGates = SeaImportStateMachine.requiredGatesForTransition(canonicalTarget);
@@ -789,7 +893,7 @@ export class FreightService {
                                 severity: 'warn',
                                 status: 'Open',
                                 title: `${requiredGateCode} Gate Failed: ${gateResult.reason}`,
-                                description: gateResult.detail ? JSON.stringify(gateResult.detail) : null,
+                                description: gateResult.details ? JSON.stringify(gateResult.details) : null,
                                 created_by: actorId,
                             });
                         }
@@ -815,7 +919,14 @@ export class FreightService {
             }
         } else if (file.direction === 'export') {
             const containers = await FreightRepository.getContainers(id);
-            transition = SeaExportStateMachine.validateTransition(file, canonicalTarget, containers);
+            try {
+                transition = SeaExportStateMachine.validateTransition(file, canonicalTarget, containers);
+            } catch (error) {
+                if (error instanceof AppError && error.code === 'SPECIAL_HANDLING_GATE_FAILED') {
+                    await this.recordSpecialGateFailure(id, workspaceId, actorId, error.message, error.details);
+                }
+                throw error;
+            }
         } else {
             throw new AppError(400, 'INVALID_DIRECTION', `Unsupported direction '${file.direction}' for lifecycle transition`);
         }
@@ -993,6 +1104,7 @@ export class FreightService {
         const targetStatus = SeaImportStatus.ARRIVED;
         if (file.status !== SeaImportStatus.ARRIVED && file.status !== SeaImportStatus.CLEARED && file.status !== SeaImportStatus.DELIVERED && file.status !== SeaImportStatus.CLOSED) {
             transitionResult = SeaImportStateMachine.validateTransition(file.status, targetStatus);
+            SeaImportStateMachine.validateMilestoneTimestamp({ ...file, ata: ataValue }, targetStatus);
         }
 
         const freeTimeDays = file.free_time_days || 5;

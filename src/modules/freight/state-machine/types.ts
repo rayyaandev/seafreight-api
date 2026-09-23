@@ -86,6 +86,8 @@ export interface FreightContainerEntity {
     msds_attached: boolean | number;
     dg_declaration_attached: boolean | number;
     carrier_dg_accepted: boolean | number;
+    dg_segregation_requirements?: string | null;
+    reefer_monitoring_confirmed?: boolean | number;
     is_oog: boolean | number;
     oog_dimensions?: string | null;
     created_at: Date | string;

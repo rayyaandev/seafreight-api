@@ -66,13 +66,13 @@ export class FreightController {
     public static async updateSpecialHandling(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const { workspaceId, actorId } = req.context;
-            const { version, special_handling, special_status, reason } = req.body;
+            const { version, special_handling, reason } = req.body;
             const updated = await FreightService.updateSpecialHandling(
                 req.params.id as string,
                 workspaceId,
                 actorId,
-                version !== undefined ? Number(version) : undefined,
-                { special_handling, special_status, reason }
+                Number(version),
+                { special_handling, reason }
             );
             sendSuccess(res, updated);
         } catch (err) {
@@ -111,6 +111,29 @@ export class FreightController {
         } catch (err) {
             next(err);
         }
+    }
+
+    public static async updateContainerHandling(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const { version, ...updates } = req.body;
+            const result = await FreightService.updateContainerHandling(
+                req.params.containerId as string, req.params.id as string,
+                workspaceId, actorId, Number(version), updates
+            );
+            sendSuccess(res, result);
+        } catch (err) { next(err); }
+    }
+
+    public static async gateInContainer(req: Request, res: Response, next: NextFunction): Promise<void> {
+        try {
+            const { workspaceId, actorId } = req.context;
+            const result = await FreightService.gateInContainer(
+                req.params.containerId as string, req.params.id as string,
+                workspaceId, actorId, Number(req.body.version), req.body.gate_in_at
+            );
+            sendSuccess(res, result);
+        } catch (err) { next(err); }
     }
 
     // ------------------------------------------------------------------------
