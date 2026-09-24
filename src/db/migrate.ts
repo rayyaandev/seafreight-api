@@ -7,6 +7,7 @@ async function runMigration() {
     try {
         await db.raw('SET FOREIGN_KEY_CHECKS = 0');
         const tables = [
+            'auth_session',
             'target',
             'document_ref',
             'processed_message',

@@ -50,8 +50,13 @@ export class AuthController {
         }
     }
 
-    public static async logout(_req: Request, res: Response, next: NextFunction): Promise<void> {
+    public static async logout(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
+            const accessToken = req.headers.authorization?.startsWith('Bearer ')
+                ? req.headers.authorization.slice(7)
+                : undefined;
+            const refreshToken = req.cookies?.refresh_token || req.body?.refresh_token;
+            await AuthService.logout(accessToken, refreshToken);
             res.clearCookie('refresh_token', {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
@@ -63,4 +68,3 @@ export class AuthController {
         }
     }
 }
-

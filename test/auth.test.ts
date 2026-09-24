@@ -211,13 +211,65 @@ describe('Auth & RBAC', () => {
             expect(data.data.access_token).toBeTruthy();
         });
 
-        it('Logout clears session and returns 200', async () => {
+        it('Logout requires a token to revoke', async () => {
             const res = await fetch(`${baseUrl}/v1/auth/logout`, {
                 method: 'POST',
             });
             const data = await json(res);
+            expect(res.status).toBe(401);
+            expect(data.error.code).toBe('UNAUTHORIZED');
+        });
+
+        it('Logout revokes access and refresh tokens without affecting another login', async () => {
+            const first = await login('coordinator@yourcargocontact.com', 'Password123!');
+            const second = await login('coordinator@yourcargocontact.com', 'Password123!');
+            const accessToken = first.data.data.access_token;
+            const refreshToken = first.data.data.refresh_token;
+
+            const before = await fetch(`${baseUrl}/v1/auth/me`, { headers: authHeaders(accessToken) });
+            expect(before.status).toBe(200);
+
+            const res = await fetch(`${baseUrl}/v1/auth/logout`, {
+                method: 'POST',
+                headers: authHeaders(accessToken),
+            });
+            const data = await json(res);
             expect(res.status).toBe(200);
             expect(data.data.logged_out).toBe(true);
+
+            const after = await fetch(`${baseUrl}/v1/auth/me`, { headers: authHeaders(accessToken) });
+            expect(after.status).toBe(401);
+
+            const refresh = await fetch(`${baseUrl}/v1/auth/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refresh_token: refreshToken }),
+            });
+            expect(refresh.status).toBe(401);
+
+            const otherSession = await fetch(`${baseUrl}/v1/auth/me`, {
+                headers: authHeaders(second.data.data.access_token),
+            });
+            expect(otherSession.status).toBe(200);
+        });
+
+        it('Logout with refresh cookie revokes its access token', async () => {
+            const session = await login('customs@yourcargocontact.com', 'Password123!');
+            const { access_token, refresh_token } = session.data.data;
+            const res = await fetch(`${baseUrl}/v1/auth/logout`, {
+                method: 'POST',
+                headers: { Cookie: `refresh_token=${refresh_token}` },
+            });
+            expect(res.status).toBe(200);
+            const profile = await fetch(`${baseUrl}/v1/auth/me`, { headers: authHeaders(access_token) });
+            expect(profile.status).toBe(401);
+        });
+
+        it('Refresh token cannot authenticate profile requests', async () => {
+            const res = await fetch(`${baseUrl}/v1/auth/me`, {
+                headers: authHeaders(coordinatorRefreshToken),
+            });
+            expect(res.status).toBe(401);
         });
     });
 });

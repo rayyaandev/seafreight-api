@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../auth/auth.service.js';
-import { sendError } from '../utils/response.js';
+import { AppError, sendError } from '../utils/response.js';
 
 declare global {
     namespace Express {
@@ -16,13 +16,13 @@ declare global {
     }
 }
 
-export function authMiddleware(req: Request, res: Response, next: NextFunction): void {
+export async function authMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
     const authHeader = req.headers.authorization;
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.substring(7);
         try {
-            const decoded = AuthService.verifyToken(token);
+            const decoded = await AuthService.verifyToken(token);
             req.context = {
                 workspaceId: decoded.workspaceId,
                 actorId: decoded.userId,
@@ -32,7 +32,11 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
             };
             return next();
         } catch (err) {
-            sendError(res, 'UNAUTHORIZED', 'Invalid or expired authentication token', 401);
+            if (err instanceof AppError) {
+                sendError(res, 'UNAUTHORIZED', 'Invalid or expired authentication token', 401);
+            } else {
+                next(err);
+            }
             return;
         }
     }
