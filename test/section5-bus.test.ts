@@ -9,6 +9,7 @@ import { connectRabbitMQ, isConnected, publish, setOnConnected, shutdownRabbitMQ
     EXCHANGE } from '../src/bus/rabbitmq.config.js';
 import { startConsumers, stopConsumers } from '../src/bus/consumer.service.js';
 import { startOutboxWorker, stopOutboxWorker } from '../src/bus/outbox.worker.js';
+import { testPorts } from './helpers/ports.js';
 
 const run = process.env.SECTION5_BUS_TEST === '1';
 const base = 'http://127.0.0.1:4991';
@@ -54,7 +55,7 @@ describe.skipIf(!run)('Section 5 isolated RabbitMQ path', () => {
 
     it('publishes drayage request and consumes Trucking and WMS replies', async () => {
         const create = await fetch(`${base}/v1/freight/files`, { method: 'POST', headers,
-            body: JSON.stringify({ direction: 'import' }) });
+            body: JSON.stringify({ direction: 'import', ...await testPorts() }) });
         const file = (await create.json() as any).data;
         const orderResponse = await fetch(`${base}/v1/freight/files/${file.id}/drayage-orders`, {
             method: 'POST', headers, body: JSON.stringify({ type: 'import_delivery',

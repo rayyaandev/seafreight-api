@@ -1,5 +1,5 @@
 import { FreightRepository } from './freight.repository.js';
-import { evaluateAllGates, evaluateSpecialHandlingDetails, specialHandlingGate } from './gates/index.js';
+import { evaluateAllGates, evaluateSpecialHandlingDetails, specialHandlingGate, validationGate } from './gates/index.js';
 import { SeaImportStateMachine } from './state-machine/import-state-machine.js';
 import { SeaExportStateMachine } from './state-machine/export-state-machine.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -135,15 +135,24 @@ export class FreightService {
         const specialType = data.special_handling || SpecialType.NONE;
         const initialSpecialStatus = evaluateSpecialHandlingDetails(specialType, []).status;
 
-        const file = await FreightRepository.create({
+        const candidate = {
             ...safeData,
-            workspace_id: workspaceId,
-            created_by: actorId,
             file_no: fileNo,
             mode,
             status: initialStatus,
             special_handling: specialType,
             special_status: initialSpecialStatus,
+        } as FreightFileEntity;
+        const validation = validationGate(candidate);
+        if (!validation.pass) {
+            throw new AppError(422, 'VALIDATION_GATE_FAILED', validation.reason || 'File validation failed',
+                undefined, validation.details);
+        }
+
+        const file = await FreightRepository.create({
+            ...candidate,
+            workspace_id: workspaceId,
+            created_by: actorId,
         });
 
         // Enqueue creation event (best-effort, non-transactional for create since the file insert is not tx-aware)
@@ -205,6 +214,14 @@ export class FreightService {
         const { status: _ignoredStatus, special_handling: _ignoredHandling, special_status: _ignoredSpecialStatus,
             declaration_id: _declarationId, declaration_status: _declarationStatus, mrn: _mrn,
             container_release_received_at: _releaseAt, ...sanitizedUpdates } = updates;
+
+        if ('pol_id' in sanitizedUpdates || 'pod_id' in sanitizedUpdates) {
+            const validation = validationGate({ ...current, ...sanitizedUpdates });
+            if (!validation.pass) {
+                throw new AppError(422, 'VALIDATION_GATE_FAILED', validation.reason || 'File validation failed',
+                    undefined, validation.details);
+            }
+        }
 
         const updated = await db.transaction(async (trx) => {
             const result = await FreightRepository.updateWithTrx(trx, id, workspaceId, version, sanitizedUpdates);
@@ -283,26 +300,27 @@ export class FreightService {
         return updated;
     }
 
-    private static async recordSpecialGateFailure(
+    private static async recordGateFailure(
         freightFileId: string,
         workspaceId: string,
         actorId: string,
+        gateCode: GateCode,
         reason: string,
         details?: unknown
     ): Promise<void> {
         const existing = await db('exception_case')
-            .where({ freight_file_id: freightFileId, workspace_id: workspaceId, gate_code: GateCode.SPECIAL_HANDLING })
+            .where({ freight_file_id: freightFileId, workspace_id: workspaceId, gate_code: gateCode })
             .whereIn('status', ['Open', 'InProgress'])
             .first();
         if (!existing) {
             await FreightRepository.createException({
                 workspace_id: workspaceId,
                 freight_file_id: freightFileId,
-                gate_code: GateCode.SPECIAL_HANDLING,
+                gate_code: gateCode,
                 type: 'gate_failure',
                 severity: 'warn',
                 status: 'Open',
-                title: 'Special handling gate failed',
+                title: `${gateCode} gate failed`,
                 description: JSON.stringify({ reason, details }),
                 created_by: actorId,
             });
@@ -357,7 +375,8 @@ export class FreightService {
         if (container.gate_in_at) throw new AppError(409, 'ALREADY_GATED_IN', 'Container already has a gate-in timestamp');
         const gate = specialHandlingGate(file, { containers });
         if (!gate.pass) {
-            await this.recordSpecialGateFailure(freightFileId, workspaceId, actorId, gate.reason || 'Special handling RED', gate.details);
+            await this.recordGateFailure(freightFileId, workspaceId, actorId, GateCode.SPECIAL_HANDLING,
+                gate.reason || 'Special handling RED', gate.details);
             throw new AppError(422, 'SPECIAL_HANDLING_GATE_FAILED', gate.reason || 'Special handling RED', undefined, gate.details);
         }
         const timestamp = gateInAt ? new Date(gateInAt) : new Date();
@@ -1007,12 +1026,27 @@ export class FreightService {
                 }
             }
         } else if (file.direction === 'export') {
-            const containers = await FreightRepository.getContainers(id);
+            const [containers, lines] = await Promise.all([
+                FreightRepository.getContainers(id),
+                FreightRepository.getLines(id),
+            ]);
             try {
                 transition = SeaExportStateMachine.validateTransition(file, canonicalTarget, containers);
+                if (canonicalTarget === SeaExportStatus.LOADED) {
+                    const gate = validationGate(file, { containers, lines });
+                    if (!gate.pass) {
+                        throw new AppError(422, 'VALIDATION_GATE_FAILED', gate.reason || 'File validation failed',
+                            undefined, gate.details);
+                    }
+                }
             } catch (error) {
                 if (error instanceof AppError && error.code === 'SPECIAL_HANDLING_GATE_FAILED') {
-                    await this.recordSpecialGateFailure(id, workspaceId, actorId, error.message, error.details);
+                    await this.recordGateFailure(id, workspaceId, actorId, GateCode.SPECIAL_HANDLING,
+                        error.message, error.details);
+                }
+                if (error instanceof AppError && error.code === 'VALIDATION_GATE_FAILED') {
+                    await this.recordGateFailure(id, workspaceId, actorId, GateCode.VALIDATION,
+                        error.message, error.details);
                 }
                 throw error;
             }

@@ -7,6 +7,7 @@ import { seedDatabase, WORKSPACE_ID, USER_COORDINATOR_ID } from '../src/db/seeds
 import { IntegrationService } from '../src/modules/integrations/integration.service.js';
 import { handleSection4Event } from '../src/bus/handlers/section4.handler.js';
 import type { EventEnvelope } from '../src/common/events.js';
+import { testPorts } from './helpers/ports.js';
 
 const run = process.env.SECTION4_TEST_DB === '1';
 const base = 'http://127.0.0.1:4994';
@@ -16,7 +17,8 @@ let server: Server;
 const event = (type: string, payload: Record<string, unknown>, workspace = WORKSPACE_ID, id = randomUUID()): EventEnvelope =>
     ({ id, type, payload, workspace_id: workspace, actor: 'system', occurred_at: new Date().toISOString(), version: 1 });
 async function post(path: string, body: unknown) {
-    const res = await fetch(`${base}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+    const payload = path === '/v1/freight/files' ? { ...await testPorts(), ...(body as object) } : body;
+    const res = await fetch(`${base}${path}`, { method: 'POST', headers, body: JSON.stringify(payload) });
     return { status: res.status, body: await res.json() as any };
 }
 

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createApp } from '../src/app.js';
 import { seedDatabase } from '../src/db/seeds/01_sea_freight_seed.js';
 import type { Server } from 'http';
+import { testPorts } from './helpers/ports.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const json = (res: Response): Promise<any> => res.json();
@@ -187,6 +188,7 @@ describe('Sea Freight API Integration', () => {
         body: JSON.stringify({
           mode: 'sea',
           direction: 'import',
+          ...await testPorts(),
           shipper_name: 'Kyoto Electronics Co.',
           consignee_name: 'Dutch Distribution Center B.V.',
           pol: 'JPOSA',

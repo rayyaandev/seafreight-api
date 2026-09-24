@@ -3,6 +3,8 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createApp } from '../src/app.js';
 import { seedDatabase } from '../src/db/seeds/01_sea_freight_seed.js';
+import db from '../src/db/connection.js';
+import { testPorts } from './helpers/ports.js';
 
 // The seed deletes rows. This suite must never run against the configured app database.
 const isolated = process.env.SECTION3_TEST_DB === '1' && process.env.DB_NAME?.startsWith('codex_section3_');
@@ -13,10 +15,12 @@ describe.skipIf(!isolated)('Section 3 API in an isolated database', () => {
     let token: string;
 
     async function request(method: string, path: string, body?: unknown) {
+        const payload = method === 'POST' && path === '/v1/freight/files'
+            ? { ...await testPorts(), ...body as object } : body;
         const response = await fetch(`${base}${path}`, {
             method,
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+            ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
         });
         return { status: response.status, body: await response.json() as any };
     }
@@ -91,8 +95,13 @@ describe.skipIf(!isolated)('Section 3 API in an isolated database', () => {
     it('blocks reefer loading after equipment confirmation is withdrawn, then permits it when restored', async () => {
         const now = new Date().toISOString();
         const cutoff = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        const [pol, pod] = await Promise.all([
+            db('location').where({ un_locode: 'NLRTM' }).first(),
+            db('location').where({ un_locode: 'AEJEA' }).first(),
+        ]);
         const created = await request('POST', '/v1/freight/files', {
             direction: 'export', special_handling: 'REEFER', vgm_cutoff: cutoff,
+            pol_id: pol.id, pod_id: pod.id,
         });
         const id = created.body.data.id;
         const added = await request('POST', `/v1/freight/files/${id}/containers`, {

@@ -170,6 +170,20 @@ describe('Dev Event Simulator API (/v1/dev)', () => {
         expect(createdFile.status).toBe('Draft');
     });
 
+    it('rejects a won quote whose ports cannot pass file validation', async () => {
+        const quoteId = `Q-INVALID-${Date.now()}`;
+        const res = await fetch(`${baseUrl}/v1/dev/simulate`, {
+            method: 'POST', headers: managerHeaders,
+            body: JSON.stringify({ event_type: 'sales.quote.won', direct_dispatch: true,
+                payload: { quote_id: quoteId, customer_name: 'Test Customer',
+                    pol: 'UNKNOWN', pod: 'USNYC' } }),
+        });
+        const data = await json(res);
+        expect(res.status).toBe(422);
+        expect(data.error.code).toBe('VALIDATION_GATE_FAILED');
+        expect(data.error.details.missing_fields).toContain('pol_id');
+    });
+
     it('POST /v1/dev/simulate updates file status on declaration.accepted', async () => {
         // Target seeded import file SF-2026-00001
         const file = await db('freight_file').where('file_no', 'SF-2026-00001').first();

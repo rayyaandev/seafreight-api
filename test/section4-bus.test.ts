@@ -8,6 +8,7 @@ import { connectRabbitMQ, isConnected, publish, setOnConnected, shutdownRabbitMQ
 import { startConsumers, stopConsumers } from '../src/bus/consumer.service.js';
 import { startOutboxWorker, stopOutboxWorker } from '../src/bus/outbox.worker.js';
 import { startIntegrationWorker, stopIntegrationWorker } from '../src/modules/integrations/integration.worker.js';
+import { testPorts } from './helpers/ports.js';
 
 const run = process.env.SECTION4_BUS_TEST === '1';
 const base = 'http://127.0.0.1:4993';
@@ -15,7 +16,8 @@ const headers = { 'Content-Type': 'application/json', 'x-actor-id': USER_COORDIN
     'x-workspace-id': WORKSPACE_ID, 'x-permissions': 'freight.file.create,freight.file.read,freight.file.update,freight.file.clear' };
 let server: Server;
 async function post(path: string, body: unknown) {
-    const response = await fetch(`${base}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+    const payload = path === '/v1/freight/files' ? { ...await testPorts(), ...(body as object) } : body;
+    const response = await fetch(`${base}${path}`, { method: 'POST', headers, body: JSON.stringify(payload) });
     return { status: response.status, body: await response.json() as any };
 }
 async function until<T>(read: () => Promise<T>, ready: (value: T) => boolean): Promise<T> {

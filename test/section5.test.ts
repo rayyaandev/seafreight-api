@@ -6,6 +6,7 @@ import { createApp } from '../src/app.js';
 import { seedDatabase, WORKSPACE_ID, USER_COORDINATOR_ID } from '../src/db/seeds/01_sea_freight_seed.js';
 import { handleOperationalEvent } from '../src/bus/handlers/operational.handler.js';
 import type { EventEnvelope } from '../src/common/events.js';
+import { testPorts } from './helpers/ports.js';
 
 const run = process.env.SECTION5_TEST_DB === '1';
 const base = 'http://127.0.0.1:4992';
@@ -17,8 +18,10 @@ function event(type: string, payload: Record<string, unknown>, workspace = WORKS
         occurred_at: new Date().toISOString(), version: 1 };
 }
 async function request(method: string, path: string, body?: unknown) {
+    const payload = method === 'POST' && path === '/v1/freight/files'
+        ? { ...await testPorts(), ...(body as object) } : body;
     const res = await fetch(`${base}${path}`, { method, headers,
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+        ...(payload === undefined ? {} : { body: JSON.stringify(payload) }) });
     return { status: res.status, body: await res.json() as any };
 }
 

@@ -1,6 +1,9 @@
 import { randomUUID } from 'crypto';
 import db from '../../db/connection.js';
 import type { EventEnvelope, SalesQuoteWonPayload } from '../../common/events.js';
+import { validationGate } from '../../modules/freight/gates/index.js';
+import { AppError } from '../../utils/response.js';
+import type { FreightFileEntity } from '../../common/types.js';
 
 /**
  * Handles `sales.quote.won`:
@@ -38,6 +41,18 @@ export async function handleSalesQuoteWon(envelope: EventEnvelope): Promise<void
         .first();
     const seq = (countResult ? Number(countResult.count) : 0) + 1;
     const fileNo = `SF-${year}-${String(seq).padStart(5, '0')}`;
+
+    const validation = validationGate({
+        file_no: fileNo,
+        mode: 'sea',
+        direction: 'export',
+        pol_id: polId,
+        pod_id: podId,
+    } as FreightFileEntity);
+    if (!validation.pass) {
+        throw new AppError(422, 'VALIDATION_GATE_FAILED', validation.reason || 'File validation failed',
+            undefined, validation.details);
+    }
 
     const fileId = randomUUID();
 

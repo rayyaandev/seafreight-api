@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createApp } from '../src/app.js';
+import db from '../src/db/connection.js';
+import { testPorts } from './helpers/ports.js';
 import type { Server } from 'http';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -107,12 +109,14 @@ describe('Freight Dossier & Child Entities', () => {
 
   describe('3. Dossier Creation & Retrieval', () => {
     it('POST /v1/freight/files creates file with 201', async () => {
+      const ports = await testPorts();
       const res = await fetch(`${baseUrl}/v1/freight/files`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
           mode: 'sea',
           direction: 'import',
+          ...ports,
           vessel: 'MSC Grandiosa',
           voyage: '2026W01',
           free_time_days: 7,
@@ -127,6 +131,28 @@ describe('Freight Dossier & Child Entities', () => {
 
       fileId = data.data.id;
       fileVersion = data.data.version;
+    });
+
+    it('rejects invalid import and export creation with field details', async () => {
+      for (const direction of ['import', 'export']) {
+        const missing = await fetch(`${baseUrl}/v1/freight/files`, {
+          method: 'POST', headers, body: JSON.stringify({ direction }),
+        });
+        const missingData = await json(missing);
+        expect(missing.status).toBe(422);
+        expect(missingData.error.code).toBe('VALIDATION_GATE_FAILED');
+        expect(missingData.error.details.missing_fields).toEqual(expect.arrayContaining(['pol_id', 'pod_id']));
+
+        const ports = await testPorts();
+        const samePort = await fetch(`${baseUrl}/v1/freight/files`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ direction, pol_id: ports.pol_id, pod_id: ports.pol_id }),
+        });
+        const samePortData = await json(samePort);
+        expect(samePort.status).toBe(422);
+        expect(samePortData.error.code).toBe('VALIDATION_GATE_FAILED');
+        expect(samePortData.error.message).toContain('cannot be the same');
+      }
     });
 
     it('GET /v1/freight/files/:id returns complete dossier', async () => {
@@ -165,6 +191,20 @@ describe('Freight Dossier & Child Entities', () => {
       expect(data.data.vessel).toBe('MSC Grandiosa II');
 
       fileVersion = data.data.version;
+    });
+
+    it('rejects clearing a required port after creation', async () => {
+      const res = await fetch(`${baseUrl}/v1/freight/files/${fileId}`, {
+        method: 'PATCH', headers,
+        body: JSON.stringify({ version: fileVersion, pol_id: null }),
+      });
+      const data = await json(res);
+      expect(res.status).toBe(422);
+      expect(data.error.code).toBe('VALIDATION_GATE_FAILED');
+      expect(data.error.details.missing_fields).toContain('pol_id');
+      const current = await json(await fetch(`${baseUrl}/v1/freight/files/${fileId}`, { headers }));
+      expect(current.data.version).toBe(fileVersion);
+      expect(current.data.pol_id).toBeTruthy();
     });
   });
 
@@ -412,6 +452,7 @@ describe('Freight Dossier & Child Entities', () => {
         body: JSON.stringify({
           mode: 'sea',
           direction: 'import',
+          ...await testPorts(),
           vessel: 'Maersk Mc-Kinney Moller',
           voyage: '2602W',
         }),
@@ -542,6 +583,7 @@ describe('Freight Dossier & Child Entities', () => {
         body: JSON.stringify({
           mode: 'sea',
           direction: 'export',
+          ...await testPorts(),
           vessel: 'CMA CGM Jacques Saade',
           voyage: '2603E',
           vgm_cutoff: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
@@ -614,12 +656,38 @@ describe('Freight Dossier & Child Entities', () => {
       const fRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}`, { headers });
       const fData = await json(fRes);
 
-      // 5. Load
+      // 5. Loading must reject a legacy file whose ports are invalid after creation.
+      await db('freight_file').where({ id: testExportId }).update({ pol_id: null, pod_id: null });
+      const invalidLoadRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}/load`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ version: fData.data.version }),
+      });
+      const invalidLoadData = await json(invalidLoadRes);
+      expect(invalidLoadRes.status).toBe(422);
+      expect(invalidLoadData.error.code).toBe('VALIDATION_GATE_FAILED');
+      expect(invalidLoadData.error.details.missing_fields).toEqual(expect.arrayContaining(['pol_id', 'pod_id']));
+      const unchangedRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}`, { headers });
+      const unchangedData = await json(unchangedRes);
+      expect(unchangedData.data.status).toBe('VgmSiSubmitted');
+      expect(unchangedData.data.exceptions.some((item: any) => item.gate_code === 'VALIDATION')).toBe(true);
+
+      const [pol, pod] = await Promise.all([
+        db('location').where({ un_locode: 'NLRTM' }).first(),
+        db('location').where({ un_locode: 'CNSHA' }).first(),
+      ]);
+      const fixRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}`, {
+        method: 'PATCH', headers,
+        body: JSON.stringify({ version: unchangedData.data.version, pol_id: pol.id, pod_id: pod.id }),
+      });
+      const fixData = await json(fixRes);
+      expect(fixRes.status).toBe(200);
+
+      // 6. Load after validation passes.
       const loadRes = await fetch(`${baseUrl}/v1/freight/files/${testExportId}/load`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          version: fData.data.version,
+          version: fixData.data.version,
           reason: 'Loaded on board',
         }),
       });
