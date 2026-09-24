@@ -3,13 +3,13 @@ import { createHmac, randomUUID } from 'crypto';
 import type { Server } from 'http';
 import db from '../src/db/connection.js';
 import { createApp } from '../src/app.js';
-import { seedDatabase, WORKSPACE_ID, USER_COORDINATOR_ID } from '../src/db/seeds/01_sea_freight_seed.js';
+import { WORKSPACE_ID, USER_COORDINATOR_ID } from '../src/db/seeds/01_sea_freight_seed.js';
 import { IntegrationService } from '../src/modules/integrations/integration.service.js';
 import { handleSection4Event } from '../src/bus/handlers/section4.handler.js';
 import type { EventEnvelope } from '../src/common/events.js';
 import { testPorts } from './helpers/ports.js';
+import { requireIsolatedTestDatabase } from './helpers/database.js';
 
-const run = process.env.SECTION4_TEST_DB === '1';
 const base = 'http://127.0.0.1:4994';
 const headers = { 'Content-Type': 'application/json', 'x-actor-id': USER_COORDINATOR_ID,
     'x-workspace-id': WORKSPACE_ID, 'x-permissions': 'freight.file.create,freight.file.read,freight.file.update,freight.file.clear' };
@@ -22,12 +22,11 @@ async function post(path: string, body: unknown) {
     return { status: res.status, body: await res.json() as any };
 }
 
-describe.skipIf(!run)('Section 4 integrations', () => {
+describe('Section 4 integrations', () => {
     beforeAll(async () => {
-        if (!/^codex_section[45]_/.test(process.env.DB_NAME || '')) throw new Error('Isolated test database required');
+        requireIsolatedTestDatabase();
         process.env.PORTBASE_WEBHOOK_SECRET = 'test-portbase-secret';
         process.env.TERMINAL_WEBHOOK_SECRET = 'test-terminal-secret';
-        await seedDatabase();
         server = createApp().listen(4994);
     });
     afterAll(() => server?.close());

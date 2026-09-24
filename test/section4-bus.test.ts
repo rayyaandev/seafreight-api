@@ -2,13 +2,14 @@ import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { randomUUID } from 'crypto';
 import type { Server } from 'http';
 import db from '../src/db/connection.js';
-import { seedDatabase, WORKSPACE_ID, USER_COORDINATOR_ID } from '../src/db/seeds/01_sea_freight_seed.js';
+import { WORKSPACE_ID, USER_COORDINATOR_ID } from '../src/db/seeds/01_sea_freight_seed.js';
 import { createApp } from '../src/app.js';
 import { connectRabbitMQ, isConnected, publish, setOnConnected, shutdownRabbitMQ } from '../src/bus/rabbitmq.config.js';
 import { startConsumers, stopConsumers } from '../src/bus/consumer.service.js';
 import { startOutboxWorker, stopOutboxWorker } from '../src/bus/outbox.worker.js';
 import { startIntegrationWorker, stopIntegrationWorker } from '../src/modules/integrations/integration.worker.js';
 import { testPorts } from './helpers/ports.js';
+import { requireIsolatedTestDatabase } from './helpers/database.js';
 
 const run = process.env.SECTION4_BUS_TEST === '1';
 const base = 'http://127.0.0.1:4993';
@@ -32,9 +33,10 @@ async function until<T>(read: () => Promise<T>, ready: (value: T) => boolean): P
 
 describe.skipIf(!run)('Section 4 isolated RabbitMQ path', () => {
     beforeAll(async () => {
-        if (!process.env.DB_NAME?.startsWith('codex_section4_') ||
-            !process.env.AMQP_URL?.includes('/codex_section4_')) throw new Error('Isolated DB and RabbitMQ vhost required');
-        await seedDatabase();
+        requireIsolatedTestDatabase();
+        if (!process.env.AMQP_URL?.endsWith(`/${process.env.DB_NAME}`)) {
+            throw new Error('A RabbitMQ vhost matching the disposable test database is required');
+        }
         server = createApp().listen(4993);
         setOnConnected(startConsumers);
         await connectRabbitMQ();

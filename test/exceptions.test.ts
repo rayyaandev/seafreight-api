@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { Server } from 'http';
 import { createApp } from '../src/app.js';
-import { seedDatabase } from '../src/db/seeds/01_sea_freight_seed.js';
 import db from '../src/db/connection.js';
+import { requireIsolatedTestDatabase } from './helpers/database.js';
+import { testPorts } from './helpers/ports.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const json = (res: Response): Promise<any> => res.json();
@@ -16,7 +17,7 @@ let customsHeaders: Record<string, string>;
 let managerHeaders: Record<string, string>;
 
 beforeAll(async () => {
-    await seedDatabase();
+    requireIsolatedTestDatabase();
     const app = createApp();
     server = app.listen(PORT);
 
@@ -201,9 +202,32 @@ describe('Cross-Dossier Exception Hub API (/v1/exceptions)', () => {
     // ── Critical Exception Blocking Tests ────────────────────────────────────
 
     it('Active critical exception blocks file transition with 422 CRITICAL_EXCEPTION_BLOCKED', async () => {
-        // Find export file SF-2026-00004
-        const file = await db('freight_file').where('file_no', 'SF-2026-00004').first();
-        expect(file).toBeDefined();
+        const created = await fetch(`${baseUrl}/v1/freight/files`, {
+            method: 'POST', headers: coordinatorHeaders,
+            body: JSON.stringify({ direction: 'export', ...await testPorts(),
+                vgm_cutoff: new Date(Date.now() + 24 * 3600 * 1000).toISOString() }),
+        });
+        expect(created.status).toBe(201);
+        const file = (await json(created)).data;
+        const booked = await fetch(`${baseUrl}/v1/freight/files/${file.id}/book`, {
+            method: 'POST', headers: coordinatorHeaders, body: JSON.stringify({ version: file.version }),
+        });
+        expect(booked.status).toBe(200);
+        const container = await fetch(`${baseUrl}/v1/freight/files/${file.id}/containers`, {
+            method: 'POST', headers: coordinatorHeaders,
+            body: JSON.stringify({ container_number: 'CRIT1234567', type: '40HC', vgm_kg: 24000,
+                vgm_submitted_at: new Date().toISOString() }),
+        });
+        expect(container.status).toBe(201);
+        const readyFile = await json(await fetch(`${baseUrl}/v1/freight/files/${file.id}`, {
+            headers: coordinatorHeaders,
+        }));
+        const submitted = await fetch(`${baseUrl}/v1/freight/files/${file.id}/submit-vgm`, {
+            method: 'POST', headers: coordinatorHeaders,
+            body: JSON.stringify({ version: readyFile.data.version }),
+        });
+        expect(submitted.status).toBe(200);
+        const readyVersion = (await json(submitted)).data.file.version;
 
         // 1. Add critical exception case to the file
         const addCaseRes = await fetch(`${baseUrl}/v1/freight/files/${file.id}/exceptions`, {
@@ -226,7 +250,7 @@ describe('Cross-Dossier Exception Hub API (/v1/exceptions)', () => {
             headers: coordinatorHeaders,
             body: JSON.stringify({
                 target_status: 'loaded',
-                version: file.version,
+                version: readyVersion,
             }),
         });
         const transData = await json(transRes);
@@ -251,7 +275,7 @@ describe('Cross-Dossier Exception Hub API (/v1/exceptions)', () => {
             headers: coordinatorHeaders,
             body: JSON.stringify({
                 target_status: 'loaded',
-                version: file.version,
+                version: readyVersion,
             }),
         });
         const retryData = await json(retryTransRes);
@@ -261,19 +285,33 @@ describe('Cross-Dossier Exception Hub API (/v1/exceptions)', () => {
     });
 
     it('Failing gate auto-records an Open exception case on dossier', async () => {
-        // SF-2026-00001 (Import: ReleasePending with unaccepted declaration)
-        const file = await db('freight_file').where('file_no', 'SF-2026-00001').first();
-        expect(file).toBeDefined();
+        const created = await fetch(`${baseUrl}/v1/freight/files`, {
+            method: 'POST', headers: coordinatorHeaders,
+            body: JSON.stringify({ direction: 'import', ...await testPorts() }),
+        });
+        expect(created.status).toBe(201);
+        const file = (await json(created)).data;
+        const bill = await fetch(`${baseUrl}/v1/freight/files/${file.id}/bills-of-lading`, {
+            method: 'POST', headers: coordinatorHeaders,
+            body: JSON.stringify({ type: 'MBL', bl_number: 'EXCEPTION-BL', telex_release: true }),
+        });
+        expect(bill.status).toBe(201);
+        const released = await fetch(`${baseUrl}/v1/freight/files/${file.id}/release-bl`, {
+            method: 'POST', headers: coordinatorHeaders, body: JSON.stringify({ version: file.version }),
+        });
+        expect(released.status).toBe(200);
+        const releaseVersion = (await json(released)).data.file.version;
 
         // 1. Advance to Arrived
         const arrivedRes = await fetch(`${baseUrl}/v1/freight/files/${file.id}/record-ata`, {
             method: 'POST',
             headers: coordinatorHeaders,
             body: JSON.stringify({
-                version: file.version,
+                version: releaseVersion,
             }),
         });
         expect(arrivedRes.status).toBe(200);
+        const arrivalVersion = (await json(arrivedRes)).data.file.version;
 
         // 2. Attempt transition to Cleared -> fails CUSTOMS_RELEASE gate with 422
         const transRes = await fetch(`${baseUrl}/v1/freight/files/${file.id}/transition`, {
@@ -281,7 +319,7 @@ describe('Cross-Dossier Exception Hub API (/v1/exceptions)', () => {
             headers: coordinatorHeaders,
             body: JSON.stringify({
                 target_status: 'cleared',
-                version: file.version + 1,
+                version: arrivalVersion,
             }),
         });
         const transData = await json(transRes);

@@ -3,12 +3,12 @@ import { randomUUID } from 'crypto';
 import type { Server } from 'http';
 import db from '../src/db/connection.js';
 import { createApp } from '../src/app.js';
-import { seedDatabase, WORKSPACE_ID, USER_COORDINATOR_ID } from '../src/db/seeds/01_sea_freight_seed.js';
+import { WORKSPACE_ID, USER_COORDINATOR_ID } from '../src/db/seeds/01_sea_freight_seed.js';
 import { handleOperationalEvent } from '../src/bus/handlers/operational.handler.js';
 import type { EventEnvelope } from '../src/common/events.js';
 import { testPorts } from './helpers/ports.js';
+import { requireIsolatedTestDatabase } from './helpers/database.js';
 
-const run = process.env.SECTION5_TEST_DB === '1';
 const base = 'http://127.0.0.1:4992';
 const headers = { 'Content-Type': 'application/json', 'x-actor-id': USER_COORDINATOR_ID,
     'x-workspace-id': WORKSPACE_ID, 'x-permissions': 'freight.file.create,freight.file.read,freight.file.update,freight.file.release_bl,freight.file.record_ata,freight.file.clear' };
@@ -25,10 +25,9 @@ async function request(method: string, path: string, body?: unknown) {
     return { status: res.status, body: await res.json() as any };
 }
 
-describe.skipIf(!run)('Section 5 operational flow', () => {
+describe('Section 5 operational flow', () => {
     beforeAll(async () => {
-        if (!process.env.DB_NAME?.startsWith('codex_section5_')) throw new Error('Isolated Section 5 database required');
-        await seedDatabase();
+        requireIsolatedTestDatabase();
         server = createApp().listen(4992);
     });
     afterAll(() => server?.close());
@@ -47,7 +46,8 @@ describe.skipIf(!run)('Section 5 operational flow', () => {
         });
         expect(created.status).toBe(201);
         const orderId = created.body.data.id;
-        const outgoing = await db('outbox').where({ event_type: 'trucking.order.create.requested' }).first();
+        const outgoing = await db('outbox').where({ event_type: 'trucking.order.create.requested' })
+            .whereRaw("JSON_UNQUOTE(JSON_EXTRACT(payload, '$.drayage_order_id')) = ?", [orderId]).first();
         expect(JSON.parse(outgoing.payload).drayage_order_id).toBe(orderId);
         expect(JSON.parse(outgoing.payload).delivery_address).toBe('555 Customer Road');
 
@@ -78,7 +78,8 @@ describe.skipIf(!run)('Section 5 operational flow', () => {
             { version: (await db('drayage_order').where({ id: orderId }).first()).version,
                 planned_delivery_at: '2026-09-25T12:00:00Z' });
         expect(edit.status).toBe(200);
-        expect(await db('outbox').where({ event_type: 'trucking.order.update.requested' }).first()).toBeTruthy();
+        expect(await db('outbox').where({ event_type: 'trucking.order.update.requested' })
+            .whereRaw("JSON_UNQUOTE(JSON_EXTRACT(payload, '$.drayage_order_id')) = ?", [orderId]).first()).toBeTruthy();
 
         // Physical delivery records milestone. Parent file moves only when Cleared with POD.
         await db('freight_file').where({ id: fileId }).update({ status: 'Cleared' });
@@ -91,7 +92,9 @@ describe.skipIf(!run)('Section 5 operational flow', () => {
         await handleOperationalEvent(deliveredWithPod);
         await handleOperationalEvent(deliveredWithPod);
         expect((await db('freight_file').where({ id: fileId }).first()).status).toBe('Delivered');
-        expect(await db('outbox').where({ event_type: 'freight.file.delivered' }).count('id as n').first()).toMatchObject({ n: 1 });
+        expect(await db('outbox').where({ event_type: 'freight.file.delivered' })
+            .whereRaw("JSON_UNQUOTE(JSON_EXTRACT(payload, '$.file_id')) = ?", [fileId])
+            .count('id as n').first()).toMatchObject({ n: 1 });
         expect(await db('milestone').where({ freight_file_id: fileId, milestone_type: 'delivered' }).count('id as n').first()).toMatchObject({ n: 1 });
     });
 

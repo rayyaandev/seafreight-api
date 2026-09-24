@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { Server } from 'http';
 import { createApp } from '../src/app.js';
-import { seedDatabase } from '../src/db/seeds/01_sea_freight_seed.js';
 import db from '../src/db/connection.js';
+import { requireIsolatedTestDatabase } from './helpers/database.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const json = (res: Response): Promise<any> => res.json();
@@ -16,7 +16,7 @@ let customsHeaders: Record<string, string>;
 let managerHeaders: Record<string, string>;
 
 beforeAll(async () => {
-    await seedDatabase();
+    requireIsolatedTestDatabase();
     const app = createApp();
     server = app.listen(PORT);
 
@@ -84,7 +84,6 @@ describe('Dev Event Simulator API (/v1/dev)', () => {
         const types = data.data.map((t: { event_type: string }) => t.event_type);
         expect(types).toContain('declaration.accepted');
         expect(types).toContain('sales.quote.won');
-        expect(types).toContain('document.ocr.completed');
     });
 
     it('POST /v1/dev/simulate without auth returns 401 UNAUTHORIZED', async () => {

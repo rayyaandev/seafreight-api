@@ -2,14 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createApp } from '../src/app.js';
-import { seedDatabase } from '../src/db/seeds/01_sea_freight_seed.js';
 import db from '../src/db/connection.js';
 import { testPorts } from './helpers/ports.js';
+import { requireIsolatedTestDatabase } from './helpers/database.js';
 
-// The seed deletes rows. This suite must never run against the configured app database.
-const isolated = process.env.SECTION3_TEST_DB === '1' && process.env.DB_NAME?.startsWith('codex_section3_');
-
-describe.skipIf(!isolated)('Section 3 API in an isolated database', () => {
+describe('Section 3 API in an isolated database', () => {
     let server: Server;
     let base: string;
     let token: string;
@@ -26,7 +23,7 @@ describe.skipIf(!isolated)('Section 3 API in an isolated database', () => {
     }
 
     beforeAll(async () => {
-        await seedDatabase();
+        requireIsolatedTestDatabase();
         server = createApp().listen(0);
         await new Promise<void>((resolve) => server.once('listening', resolve));
         base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;

@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createApp } from '../src/app.js';
-import { seedDatabase } from '../src/db/seeds/01_sea_freight_seed.js';
 import type { Server } from 'http';
 import { testPorts } from './helpers/ports.js';
+import { requireIsolatedTestDatabase } from './helpers/database.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const json = (res: Response): Promise<any> => res.json();
@@ -14,7 +14,7 @@ let server: Server;
 let headers: Record<string, string>;
 
 beforeAll(async () => {
-  await seedDatabase();
+  requireIsolatedTestDatabase();
   const app = createApp();
   server = app.listen(PORT);
 
@@ -70,7 +70,22 @@ describe('Sea Freight API Integration', () => {
       const res = await fetch(`${baseUrl}/v1/freight/files?mode=sea`, { headers });
       listData = await json(res);
       exportFile = listData.data.find((f: any) => f.file_no === 'SF-2026-00004');
-      importFile = listData.data.find((f: any) => f.file_no === 'SF-2026-00001');
+      const created = await fetch(`${baseUrl}/v1/freight/files`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ direction: 'import', ...await testPorts() }),
+      });
+      expect(created.status).toBe(201);
+      const fresh = (await json(created)).data;
+      const bill = await fetch(`${baseUrl}/v1/freight/files/${fresh.id}/bills-of-lading`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ type: 'MBL', bl_number: 'INTEGRATION-BL', telex_release: true }),
+      });
+      expect(bill.status).toBe(201);
+      const released = await fetch(`${baseUrl}/v1/freight/files/${fresh.id}/release-bl`, {
+        method: 'POST', headers, body: JSON.stringify({ version: fresh.version }),
+      });
+      expect(released.status).toBe(200);
+      importFile = (await json(released)).data.file;
     });
 
     it('GET /v1/freight/files returns 200 with files array', () => {

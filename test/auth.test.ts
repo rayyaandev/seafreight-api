@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createApp } from '../src/app.js';
 import type { Server } from 'http';
+import { requireIsolatedTestDatabase } from './helpers/database.js';
+import { testPorts } from './helpers/ports.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const json = (res: Response): Promise<any> => res.json();
@@ -11,6 +13,7 @@ const baseUrl = `http://localhost:${PORT}`;
 let server: Server;
 
 beforeAll(() => {
+    requireIsolatedTestDatabase();
     const app = createApp();
     server = app.listen(PORT);
 });
@@ -138,7 +141,7 @@ describe('Auth & RBAC', () => {
             const res = await fetch(`${baseUrl}/v1/freight/files`, {
                 method: 'POST',
                 headers: authHeaders(coordinatorToken),
-                body: JSON.stringify({ mode: 'sea', direction: 'import' }),
+                body: JSON.stringify({ mode: 'sea', direction: 'import', ...await testPorts() }),
             });
             const data = await json(res);
             expect(res.status).toBe(201);
@@ -149,7 +152,7 @@ describe('Auth & RBAC', () => {
             const res = await fetch(`${baseUrl}/v1/freight/files`, {
                 method: 'POST',
                 headers: authHeaders(managerToken),
-                body: JSON.stringify({ mode: 'sea', direction: 'export' }),
+                body: JSON.stringify({ mode: 'sea', direction: 'export', ...await testPorts() }),
             });
             const data = await json(res);
             expect(res.status).toBe(201);

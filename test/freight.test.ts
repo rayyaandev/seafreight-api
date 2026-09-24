@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createApp } from '../src/app.js';
 import db from '../src/db/connection.js';
 import { testPorts } from './helpers/ports.js';
+import { requireIsolatedTestDatabase } from './helpers/database.js';
 import type { Server } from 'http';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -15,6 +16,7 @@ let token: string;
 let headers: Record<string, string>;
 
 beforeAll(async () => {
+  requireIsolatedTestDatabase();
   const app = createApp();
   server = app.listen(PORT);
 

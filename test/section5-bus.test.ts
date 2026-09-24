@@ -4,12 +4,13 @@ import type { Server } from 'http';
 import amqplib from 'amqplib';
 import db from '../src/db/connection.js';
 import { createApp } from '../src/app.js';
-import { seedDatabase, WORKSPACE_ID, USER_COORDINATOR_ID } from '../src/db/seeds/01_sea_freight_seed.js';
+import { WORKSPACE_ID, USER_COORDINATOR_ID } from '../src/db/seeds/01_sea_freight_seed.js';
 import { connectRabbitMQ, isConnected, publish, setOnConnected, shutdownRabbitMQ,
     EXCHANGE } from '../src/bus/rabbitmq.config.js';
 import { startConsumers, stopConsumers } from '../src/bus/consumer.service.js';
 import { startOutboxWorker, stopOutboxWorker } from '../src/bus/outbox.worker.js';
 import { testPorts } from './helpers/ports.js';
+import { requireIsolatedTestDatabase } from './helpers/database.js';
 
 const run = process.env.SECTION5_BUS_TEST === '1';
 const base = 'http://127.0.0.1:4991';
@@ -30,9 +31,10 @@ async function until<T>(read: () => Promise<T>, done: (value: T) => boolean): Pr
 
 describe.skipIf(!run)('Section 5 isolated RabbitMQ path', () => {
     beforeAll(async () => {
-        if (!process.env.DB_NAME?.startsWith('codex_section5_') ||
-            !process.env.AMQP_URL?.includes('/codex_section5_')) throw new Error('Isolated DB and vhost required');
-        await seedDatabase();
+        requireIsolatedTestDatabase();
+        if (!process.env.AMQP_URL?.endsWith(`/${process.env.DB_NAME}`)) {
+            throw new Error('A RabbitMQ vhost matching the disposable test database is required');
+        }
         server = createApp().listen(4991);
         setOnConnected(startConsumers);
         await connectRabbitMQ();

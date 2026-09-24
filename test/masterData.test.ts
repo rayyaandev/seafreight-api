@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createApp } from '../src/app.js';
 import type { Server } from 'http';
+import { requireIsolatedTestDatabase } from './helpers/database.js';
 
 const json = (res: Response): Promise<any> => res.json();
 
@@ -12,6 +13,7 @@ let token: string;
 let headers: Record<string, string>;
 
 beforeAll(async () => {
+  requireIsolatedTestDatabase();
   const app = createApp();
   server = app.listen(PORT);
 
